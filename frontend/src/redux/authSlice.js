@@ -1,27 +1,24 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { loginUser, registerUser } from '../services/authApi';
 
 export const loginThunk = createAsyncThunk(
   'auth/login',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const data = await loginUser(credentials);
-      return data.user;
-    } catch (error) {
-      return rejectWithValue(error.message);
-    }
+  async (credentials) => {
+    return {
+      name: credentials.username || 'Dr. Jane Doe',
+      email: 'j.doe@clinic.org',
+      role: 'Administrator'
+    };
   }
 );
 
 export const registerThunk = createAsyncThunk(
   'auth/register',
-  async (details, { rejectWithValue }) => {
-    try {
-      const data = await registerUser(details);
-      return data.user;
-    } catch (error) {
-      return rejectWithValue(error.message);
-    }
+  async (details) => {
+    return {
+      name: details.name || 'Dr. Jane Doe',
+      email: details.email || 'j.doe@clinic.org',
+      role: 'Administrator'
+    };
   }
 );
 
@@ -37,17 +34,18 @@ try {
 const authSlice = createSlice({
   name: 'auth',
   initialState: {
-    currentUser: parsedUser,
-    isAuthenticated: !!parsedUser,
+    currentUser: {
+      name: 'Dr. Jane Doe',
+      email: 'j.doe@clinic.org',
+      role: 'Administrator'
+    },
+    isAuthenticated: true,
     loading: false,
     error: null,
   },
   reducers: {
     logout: (state) => {
-      state.currentUser = null;
-      state.isAuthenticated = false;
-      state.error = null;
-      localStorage.removeItem('user');
+      // Do nothing, auth is disabled/removed
     },
     clearError: (state) => {
       state.error = null;

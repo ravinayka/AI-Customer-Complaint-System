@@ -14,7 +14,6 @@ import AIAssistantPanel from './components/AIAssistantPanel';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import Notifications from './pages/Notifications';
-import Auth from './pages/Auth';
 import { logout } from './redux/authSlice';
 import { fetchSettings } from './redux/settingsSlice';
 import { fetchNotificationsThunk, addNotificationFromSocket } from './redux/notificationsSlice';
@@ -175,22 +174,7 @@ function AppContent() {
     }
   }, [activeComplaintId, complaints, dispatch]);
 
-  if (!isAuthenticated) {
-    return (
-      <ConfigProvider
-        theme={{
-          algorithm: theme.darkAlgorithm,
-          token: {
-            colorPrimary: '#6366f1',
-            borderRadius: 12,
-            fontFamily: 'Outfit, Inter, system-ui, -apple-system, sans-serif',
-          }
-        }}
-      >
-        <Auth />
-      </ConfigProvider>
-    );
-  }
+
 
   const getNotificationIcon = (type) => {
     switch (type) {
@@ -746,15 +730,7 @@ function AppContent() {
                 </div>
               </Space>
 
-              <Tooltip title="Logout Controls">
-                <Button
-                  type="text"
-                  shape="circle"
-                  icon={<LogoutOutlined style={{ color: '#ef4444', fontSize: 16 }} />}
-                  onClick={() => dispatch(logout())}
-                  style={{ marginLeft: 8 }}
-                />
-              </Tooltip>
+
             </Space>
           </Header>
 
