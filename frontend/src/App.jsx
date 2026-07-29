@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react';
 import dayjs from 'dayjs';
 import { Provider, useSelector, useDispatch } from 'react-redux';
 import { store } from './redux/store';
-import { 
-  addComplaint, 
-  updateComplaint, 
-  fetchComplaints, 
-  saveComplaint, 
+import {
+  addComplaint,
+  updateComplaint,
+  fetchComplaints,
+  saveComplaint,
   updateComplaintBackendThunk,
   setActiveComplaintId
 } from './redux/complaintsSlice';
@@ -14,6 +14,8 @@ import AIAssistantPanel from './components/AIAssistantPanel';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
 import Notifications from './pages/Notifications';
+import Auth from './pages/Auth';
+import { logout } from './redux/authSlice';
 import { fetchSettings } from './redux/settingsSlice';
 import { fetchNotificationsThunk, addNotificationFromSocket } from './redux/notificationsSlice';
 import {
@@ -73,7 +75,8 @@ import {
   CloseOutlined,
   AlertOutlined,
   SafetyCertificateOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  LogoutOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -105,49 +108,57 @@ function AppContent() {
   const settingsData = useSelector((state) => state.settings.data);
   const unreadCount = useSelector((state) => state.notifications.unreadCount);
   const activeComplaintId = useSelector((state) => state.complaints.activeComplaintId);
+  const isAuthenticated = useSelector((state) => state.auth.isAuthenticated);
+  const currentUser = useSelector((state) => state.auth.currentUser);
 
   useEffect(() => {
-    dispatch(fetchSettings());
-    dispatch(fetchComplaints());
-  }, [dispatch]);
+    if (isAuthenticated) {
+      dispatch(fetchSettings());
+      dispatch(fetchComplaints());
+    }
+  }, [dispatch, isAuthenticated]);
 
   // Fetch notifications and set up 30-second poll interval
   useEffect(() => {
-    dispatch(fetchNotificationsThunk());
-    const interval = setInterval(() => {
+    if (isAuthenticated) {
       dispatch(fetchNotificationsThunk());
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [dispatch]);
+      const interval = setInterval(() => {
+        dispatch(fetchNotificationsThunk());
+      }, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [dispatch, isAuthenticated]);
 
   // Set up WebSocket connection for real-time notification dispatches
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/notifications');
-    ws.onmessage = (event) => {
-      try {
-        const messageData = JSON.parse(event.data);
-        if (messageData.event === 'new_notification') {
-          const payload = messageData.data;
-          dispatch(addNotificationFromSocket(payload));
-          notification.info({
-            message: payload.title,
-            description: payload.message,
-            icon: getNotificationIcon(payload.type),
-            placement: 'topRight',
-            duration: 5,
-          });
+    if (isAuthenticated) {
+      const ws = new WebSocket('ws://localhost:8000/ws/notifications');
+      ws.onmessage = (event) => {
+        try {
+          const messageData = JSON.parse(event.data);
+          if (messageData.event === 'new_notification') {
+            const payload = messageData.data;
+            dispatch(addNotificationFromSocket(payload));
+            notification.info({
+              message: payload.title,
+              description: payload.message,
+              icon: getNotificationIcon(payload.type),
+              placement: 'topRight',
+              duration: 5,
+            });
+          }
+        } catch (err) {
+          console.error("Failed to parse WebSocket message:", err);
         }
-      } catch (err) {
-        console.error("Failed to parse WebSocket message:", err);
-      }
-    };
-    ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
-    return () => {
-      ws.close();
-    };
-  }, [dispatch]);
+      };
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+      };
+      return () => {
+        ws.close();
+      };
+    }
+  }, [dispatch, isAuthenticated]);
 
   // Navigate to complaint details drawer when notification link clicked
   useEffect(() => {
@@ -160,6 +171,23 @@ function AppContent() {
       }
     }
   }, [activeComplaintId, complaints, dispatch]);
+
+  if (!isAuthenticated) {
+    return (
+      <ConfigProvider
+        theme={{
+          algorithm: theme.darkAlgorithm,
+          token: {
+            colorPrimary: '#6366f1',
+            borderRadius: 12,
+            fontFamily: 'Outfit, Inter, system-ui, -apple-system, sans-serif',
+          }
+        }}
+      >
+        <Auth />
+      </ConfigProvider>
+    );
+  }
 
   const getNotificationIcon = (type) => {
     switch (type) {
@@ -196,9 +224,9 @@ function AppContent() {
   // QA Assistant Validation Rules Engine
   const getQAAnalysis = (complaint) => {
     if (!complaint) return { suggestions: [], risk: 'Low', suggestedPriority: 'Low', hasIssues: false };
-    
+
     const suggestions = [];
-    
+
     // 1. Missing Batch Number
     const isMissingBatch = !complaint.batch || complaint.batch.trim() === '' || complaint.batch === 'N/A' || complaint.batch === 'None';
     if (isMissingBatch) {
@@ -252,12 +280,13 @@ function AppContent() {
     { key: '3', icon: <RobotOutlined />, label: 'AI Copilot' },
     { key: '4', icon: <BarChartOutlined />, label: 'Reports' },
     { key: '5', icon: <SettingOutlined />, label: 'Settings' },
-    { key: '6', icon: <BellOutlined />, label: (
+    {
+      key: '6', icon: <BellOutlined />, label: (
         <Space>
           Notifications
           {unreadCount > 0 && <Badge count={unreadCount} style={{ backgroundColor: '#ef4444' }} />}
         </Space>
-      ) 
+      )
     }
   ];
 
@@ -284,31 +313,31 @@ function AppContent() {
   // Handle adding new complaint with AI Analysis Simulation
   const handleCreateComplaint = (values) => {
     const newId = `CMP-00${20 + complaints.length + 1}`;
-    
+
     // Simulate AI risk classification based on category and description keywords
     let autoRisk = 'Low';
     const descLower = (values.description || '').toLowerCase();
     const catLower = (values.category || '').toLowerCase();
     if (
-      descLower.includes('rash') || 
-      descLower.includes('discomfort') || 
-      descLower.includes('adverse') || 
-      descLower.includes('hospital') || 
-      catLower.includes('reaction') || 
+      descLower.includes('rash') ||
+      descLower.includes('discomfort') ||
+      descLower.includes('adverse') ||
+      descLower.includes('hospital') ||
+      catLower.includes('reaction') ||
       catLower.includes('contamination')
     ) {
       autoRisk = 'Critical';
     } else if (
-      descLower.includes('cracked') || 
-      descLower.includes('smell') || 
-      descLower.includes('odor') || 
+      descLower.includes('cracked') ||
+      descLower.includes('smell') ||
+      descLower.includes('odor') ||
       descLower.includes('missing') ||
       catLower.includes('efficacy') ||
       descLower.includes('bad')
     ) {
       autoRisk = 'High';
     } else if (
-      descLower.includes('discoloration') || 
+      descLower.includes('discoloration') ||
       catLower.includes('packaging')
     ) {
       autoRisk = 'Medium';
@@ -335,7 +364,7 @@ function AppContent() {
 
     // Simulate AI loading state before appending
     const hide = message.loading('AI Copilot is analyzing complaint text, metadata and files...', 0);
-    
+
     setTimeout(() => {
       hide();
       dispatch(saveComplaint(newComplaint));
@@ -627,20 +656,29 @@ function AppContent() {
               </Badge>
               <Space style={{ cursor: 'pointer' }}>
                 <Avatar
-                  src={settingsData.profile_pic}
                   style={{
                     background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
                     verticalAlign: 'middle'
                   }}
                   size="large"
                 >
-                  {!settingsData.profile_pic && (settingsData.name ? settingsData.name.split(' ').map(n=>n[0]).join('').toUpperCase() : 'RM')}
+                  {currentUser?.name ? currentUser.name.split(' ').map(n => n[0]).join('').toUpperCase() : 'US'}
                 </Avatar>
                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                  <Text strong style={{ color: themeColors.textMain, fontSize: 13 }}>{settingsData.name || 'Ravi M'}</Text>
-                  <Text type="secondary" style={{ fontSize: 11, color: themeColors.textSub }}>{settingsData.role || 'Administrator'}</Text>
+                  <Text strong style={{ color: themeColors.textMain, fontSize: 13 }}>{currentUser?.name || 'User'}</Text>
+                  <Text type="secondary" style={{ fontSize: 11, color: themeColors.textSub }}>{currentUser?.role || 'Operator'}</Text>
                 </div>
               </Space>
+
+              <Tooltip title="Logout Controls">
+                <Button
+                  type="text"
+                  shape="circle"
+                  icon={<LogoutOutlined style={{ color: '#ef4444', fontSize: 16 }} />}
+                  onClick={() => dispatch(logout())}
+                  style={{ marginLeft: 8 }}
+                />
+              </Tooltip>
             </Space>
           </Header>
 
@@ -749,8 +787,8 @@ function AppContent() {
                           <svg viewBox="0 0 500 150" width="100%" height="100%" preserveAspectRatio="none">
                             <defs>
                               <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#6366f1" stopOpacity="0.3"/>
-                                <stop offset="100%" stopColor="#6366f1" stopOpacity="0.0"/>
+                                <stop offset="0%" stopColor="#6366f1" stopOpacity="0.3" />
+                                <stop offset="100%" stopColor="#6366f1" stopOpacity="0.0" />
                               </linearGradient>
                             </defs>
                             {/* Grid Lines */}
@@ -788,7 +826,7 @@ function AppContent() {
                           </div>
                           <Progress percent={Math.round((criticalCount / totalCount) * 100)} strokeColor="#ef4444" showInfo={false} size="small" />
                         </div>
-                        
+
                         <div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                             <Text style={{ color: '#f59e0b' }}>High Risk</Text>
@@ -825,9 +863,9 @@ function AppContent() {
                       <List.Item
                         style={{ borderBottom: '1px solid #1f2937' }}
                         actions={[
-                          <Text type="secondary">{item.date}</Text>, 
-                          <Button 
-                            type="link" 
+                          <Text type="secondary">{item.date}</Text>,
+                          <Button
+                            type="link"
                             onClick={() => handleOpenDetail(item)}
                           >
                             Review
@@ -960,12 +998,12 @@ function AppContent() {
           style={{ marginTop: 16 }}
         >
           {/* Quick-Fill Testing Sandbox Templates */}
-          <div style={{ 
-            background: 'rgba(99, 102, 241, 0.05)', 
-            padding: '16px', 
-            borderRadius: '8px', 
-            marginBottom: 20, 
-            border: '1px dashed rgba(99, 102, 241, 0.25)' 
+          <div style={{
+            background: 'rgba(99, 102, 241, 0.05)',
+            padding: '16px',
+            borderRadius: '8px',
+            marginBottom: 20,
+            border: '1px dashed rgba(99, 102, 241, 0.25)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <ThunderboltOutlined style={{ color: '#818cf8', fontSize: 16 }} />
@@ -977,8 +1015,8 @@ function AppContent() {
               Instantly fill the form with custom test scenarios to trigger the QA Assistant verification logic.
             </p>
             <Space wrap>
-              <Button 
-                size="small" 
+              <Button
+                size="small"
                 onClick={() => {
                   form.setFieldsValue({
                     customer: 'Care Pharmacy',
@@ -998,8 +1036,8 @@ function AppContent() {
               >
                 Load Incomplete High-Risk Ticket
               </Button>
-              <Button 
-                size="small" 
+              <Button
+                size="small"
                 onClick={() => {
                   form.setFieldsValue({
                     customer: 'Wellness Center Retail',
@@ -1145,7 +1183,7 @@ function AppContent() {
 
           {/* Section 4: Attachments */}
           <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>4. Supporting Attachments</Title>
-          
+
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item name="pdfFile" label="PDF Documents">
@@ -1186,16 +1224,20 @@ function AppContent() {
         extra={
           <Space>
             {selectedComplaint?.status !== 'Closed' ? (
-              <Button
-                type="primary"
-                onClick={() => {
-                  dispatch(updateComplaintBackendThunk({ id: selectedComplaint.id, changes: { status: 'Closed' } }));
-                  setSelectedComplaint({ ...selectedComplaint, status: 'Closed' });
-                  message.success(`Complaint ${selectedComplaint.id} has been marked as CLOSED.`);
-                }}
-              >
-                Mark Closed
-              </Button>
+              currentUser?.role === 'Administrator' ? (
+                <Button
+                  type="primary"
+                  onClick={() => {
+                    dispatch(updateComplaintBackendThunk({ id: selectedComplaint.id, changes: { status: 'Closed' } }));
+                    setSelectedComplaint({ ...selectedComplaint, status: 'Closed' });
+                    message.success(`Complaint ${selectedComplaint.id} has been marked as CLOSED.`);
+                  }}
+                >
+                  Mark Closed
+                </Button>
+              ) : (
+                <Tag color="gold" style={{ borderRadius: '6px' }}>IN REVIEW</Tag>
+              )
             ) : (
               <Tag color="success">RESOLVED</Tag>
             )}
@@ -1263,7 +1305,7 @@ function AppContent() {
 
             {/* QA Assistant Suggestions Section */}
             <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
-            
+
             {(() => {
               const qa = getQAAnalysis(selectedComplaint);
               return (
@@ -1278,13 +1320,13 @@ function AppContent() {
                       <Badge status="success" text={<span style={{ color: '#10b981', fontSize: 12 }}>QA Compliant</span>} />
                     )}
                   </div>
-                  
-                  <Card 
-                    bordered 
-                    size="small" 
-                    style={{ 
-                      background: qa.hasIssues ? 'rgba(245, 158, 11, 0.03)' : 'rgba(16, 185, 129, 0.03)', 
-                      borderColor: qa.hasIssues ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)' 
+
+                  <Card
+                    bordered
+                    size="small"
+                    style={{
+                      background: qa.hasIssues ? 'rgba(245, 158, 11, 0.03)' : 'rgba(16, 185, 129, 0.03)',
+                      borderColor: qa.hasIssues ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)'
                     }}
                   >
                     {!qa.hasIssues ? (
@@ -1331,9 +1373,9 @@ function AppContent() {
                         </Row>
 
                         {!isInlineEditing ? (
-                          <Button 
-                            type="primary" 
-                            size="small" 
+                          <Button
+                            type="primary"
+                            size="small"
                             icon={<EditOutlined />}
                             onClick={() => {
                               setInlineBatch(selectedComplaint.batch || '');
@@ -1348,16 +1390,16 @@ function AppContent() {
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'rgba(255,255,255,0.02)', padding: 10, borderRadius: 6, border: '1px solid #1f2937' }}>
                             <Text strong style={{ fontSize: 11, color: '#818cf8' }}>Quick Resolution Portal</Text>
-                            
+
                             {/* Batch code editor */}
                             {qa.suggestions.includes('Missing Batch Number') && (
                               <div>
                                 <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Add Batch Number:</span>
-                                <Input 
-                                  size="small" 
-                                  placeholder="e.g. PR500-2401" 
-                                  value={inlineBatch} 
-                                  onChange={(e) => setInlineBatch(e.target.value)} 
+                                <Input
+                                  size="small"
+                                  placeholder="e.g. PR500-2401"
+                                  value={inlineBatch}
+                                  onChange={(e) => setInlineBatch(e.target.value)}
                                 />
                               </div>
                             )}
@@ -1366,9 +1408,9 @@ function AppContent() {
                             {qa.suggestions.includes('Missing Manufacturing Date') && (
                               <div>
                                 <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Select Manufacturing Date:</span>
-                                <DatePicker 
-                                  size="small" 
-                                  style={{ width: '100%' }} 
+                                <DatePicker
+                                  size="small"
+                                  style={{ width: '100%' }}
                                   value={inlineMfgDate}
                                   onChange={(date) => setInlineMfgDate(date)}
                                 />
@@ -1379,20 +1421,20 @@ function AppContent() {
                             {qa.suggestions.includes('Complaint not complete') && (
                               <div>
                                 <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Expand Complaint Narrative (min 50 chars):</span>
-                                <Input.TextArea 
-                                  rows={2} 
-                                  size="small" 
-                                  placeholder="Provide descriptive clinical details, symptoms, packaging observations..." 
-                                  value={inlineDesc} 
-                                  onChange={(e) => setInlineDesc(e.target.value)} 
+                                <Input.TextArea
+                                  rows={2}
+                                  size="small"
+                                  placeholder="Provide descriptive clinical details, symptoms, packaging observations..."
+                                  value={inlineDesc}
+                                  onChange={(e) => setInlineDesc(e.target.value)}
                                 />
                               </div>
                             )}
 
                             <Space style={{ marginTop: 4 }}>
-                              <Button 
-                                type="primary" 
-                                size="small" 
+                              <Button
+                                type="primary"
+                                size="small"
                                 icon={<CheckOutlined />}
                                 onClick={() => {
                                   dispatch(updateComplaintBackendThunk({
@@ -1403,7 +1445,7 @@ function AppContent() {
                                       description: inlineDesc
                                     }
                                   }));
-                                  
+
                                   // Update selected complaint object locally
                                   const updatedObj = {
                                     ...selectedComplaint,
@@ -1418,8 +1460,8 @@ function AppContent() {
                               >
                                 Save & Revalidate
                               </Button>
-                              <Button 
-                                size="small" 
+                              <Button
+                                size="small"
                                 icon={<CloseOutlined />}
                                 onClick={() => setIsInlineEditing(false)}
                               >
@@ -1447,7 +1489,7 @@ function AppContent() {
                     <br />
                     <Text type="secondary" style={{ fontSize: 11, color: '#9ca3af' }}>AI Classification Audit • Ran on {selectedComplaint.date}</Text>
                     <p style={{ margin: '8px 0 0 0', color: '#cbd5e1', fontSize: 12 }}>
-                      Automated pipeline classified complaint sentiment context as <strong>{selectedComplaint.risk}</strong> and successfully mapped keywords: "{selectedComplaint.product.split(' ')[0]}", "{selectedComplaint.batch ? selectedComplaint.batch.split('-')[0] : 'N/A'}". 
+                      Automated pipeline classified complaint sentiment context as <strong>{selectedComplaint.risk}</strong> and successfully mapped keywords: "{selectedComplaint.product.split(' ')[0]}", "{selectedComplaint.batch ? selectedComplaint.batch.split('-')[0] : 'N/A'}".
                     </p>
                   </div>
                 </div>

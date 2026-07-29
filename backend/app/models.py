@@ -82,3 +82,15 @@ class AuditLog(Base):
     complaint_id = Column(String, nullable=True)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password = Column(String, nullable=False) # plain text password for demo
+    role = Column(String, nullable=False, default="User") # "Administrator" or "User"
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+

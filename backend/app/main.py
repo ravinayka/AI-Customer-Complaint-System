@@ -11,11 +11,11 @@ from app.parser import extract_text_from_file
 from app.agent import run_complaint_pipeline
 from datetime import datetime, timedelta
 from app.database import Base, engine, get_db, SessionLocal
-from app.models import Settings, Complaint, Notification, AuditLog
+from app.models import Settings, Complaint, Notification, AuditLog, User
 from app.schemas import (
     SettingsResponse, SettingsUpdate, PasswordChangeSchema,
     ComplaintResponse, ComplaintCreate, ComplaintUpdate, ReportStatistics,
-    NotificationResponse, AuditLogResponse
+    NotificationResponse, AuditLogResponse, UserCreate, UserLogin, UserResponse, AuthResponse
 )
 from typing import List, Dict, Any, Optional
 
@@ -196,6 +196,27 @@ try:
                 db.add(n)
             db.commit()
             print("INFO: Initialized default database notifications.")
+
+        existing_users = db.query(User).first()
+        if not existing_users:
+            default_users = [
+                User(
+                    name="Ravi M (Admin)",
+                    email="admin@facility.org",
+                    password="admin123",
+                    role="Administrator"
+                ),
+                User(
+                    name="John Doe (User)",
+                    email="user@facility.org",
+                    password="user123",
+                    role="User"
+                )
+            ]
+            for u in default_users:
+                db.add(u)
+            db.commit()
+            print("INFO: Initialized default database user accounts.")
 except Exception as e:
     print(f"WARNING: Failed to bootstrap default settings or complaints ({str(e)}).")
 finally:
@@ -334,6 +355,59 @@ async def delete_notification(id: int, db: Session = Depends(get_db)):
 @app.get("/api/audit-logs", response_model=List[AuditLogResponse])
 async def get_audit_logs(db: Session = Depends(get_db)):
     return db.query(AuditLog).order_by(AuditLog.created_at.desc()).all()
+
+
+# Auth endpoints
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def register(payload: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email is already registered.")
+    
+    new_user = User(
+        name=payload.name,
+        email=payload.email,
+        password=payload.password, # plain text for demo
+        role=payload.role
+    )
+    db.add(new_user)
+    
+    # Write audit log
+    db.add(AuditLog(
+        action="User Registered",
+        details=f"User '{new_user.name}' registered with role '{new_user.role}'.",
+        user_email=new_user.email
+    ))
+    db.commit()
+    db.refresh(new_user)
+    
+    return {
+        "status": "success",
+        "message": "User registered successfully.",
+        "user": new_user
+    }
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login(payload: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user or user.password != payload.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        
+    # Write audit log
+    db.add(AuditLog(
+        action="User Login",
+        details=f"User '{user.name}' logged in successfully.",
+        user_email=user.email
+    ))
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Login successful.",
+        "user": user
+    }
+
 
 @app.post("/api/analyze-text")
 async def analyze_text(payload: TextPayload):

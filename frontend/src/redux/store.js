@@ -3,6 +3,7 @@ import complaintsReducer from './complaintsSlice';
 import settingsReducer from './settingsSlice';
 import reportsReducer from './reportsSlice';
 import notificationsReducer from './notificationsSlice';
+import authReducer from './authSlice';
 
 export const store = configureStore({
   reducer: {
@@ -10,6 +11,7 @@ export const store = configureStore({
     settings: settingsReducer,
     reports: reportsReducer,
     notifications: notificationsReducer,
+    auth: authReducer,
   },
 });
 

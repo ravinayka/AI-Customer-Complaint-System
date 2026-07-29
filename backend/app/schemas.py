@@ -151,3 +151,30 @@ class AuditLogResponse(BaseModel):
         from_attributes = True
 
 
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    role: str = "User" # "Administrator" or "User"
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+    role: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AuthResponse(BaseModel):
+    status: str
+    message: str
+    user: Optional[UserResponse] = None
