@@ -17,7 +17,6 @@ import Notifications from './pages/Notifications';
 import { logout } from './redux/authSlice';
 import { fetchSettings } from './redux/settingsSlice';
 import { fetchNotificationsThunk, addNotificationFromSocket } from './redux/notificationsSlice';
-import { analyzeFile } from './services/api';
 import {
   Layout,
   Menu,
@@ -99,8 +98,6 @@ function AppContent() {
   const [inlineDesc, setInlineDesc] = useState('');
 
   // AI Intake System States
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentAiAnalysis, setCurrentAiAnalysis] = useState(null);
   const [hasFileUploaded, setHasFileUploaded] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState('');
 
@@ -308,7 +305,7 @@ function AppContent() {
       id: newId,
       product: values.strength ? `${values.product} ${values.strength}`.trim() : (values.product || 'Unknown Product'),
       batch: values.batch || 'N/A',
-      customer: values.company || 'Unknown Customer',
+      customer: values.company || values.customer || 'Unknown Customer',
       risk: values.priority || values.severity || 'Medium',
       status: 'Open',
       date: values.date ? values.date.format('YYYY-MM-DD') : new Date().toISOString().split('T')[0],
@@ -316,12 +313,11 @@ function AppContent() {
       reporter: values.customer || 'AI Ingested',
       contact: values.email || 'contact@complaint-system.ai',
       qty: 100, // default quantity
-      company: values.company,
-      mfgDate: values.mfgDate ? values.mfgDate.format('YYYY-MM-DD') : null,
-      expDate: values.expDate ? values.expDate.format('YYYY-MM-DD') : null,
+      mfg_date: values.mfgDate ? values.mfgDate.format('YYYY-MM-DD') : null,
+      exp_date: values.expDate ? values.expDate.format('YYYY-MM-DD') : null,
       category: values.category,
-      root_cause: currentAiAnalysis?.extractedData?.rootCause || '',
-      capa_recommendation: currentAiAnalysis?.extractedData?.capa || ''
+      root_cause: values.root_cause || '',
+      capa_recommendation: values.capa_recommendation || ''
     };
 
     dispatch(saveComplaint(newComplaint))
@@ -329,7 +325,6 @@ function AppContent() {
       .then(() => {
         setIsNewDrawerOpen(false);
         form.resetFields();
-        setCurrentAiAnalysis(null);
         setHasFileUploaded(false);
         setUploadedFileName('');
         message.success(`Successfully saved ticket ${newId} into database!`);
@@ -338,155 +333,6 @@ function AppContent() {
         message.error(`Failed to save complaint: ${err}`);
       });
   };
-
-  const handleAnalyzeButtonClick = () => {
-    const fileInput = document.querySelector('.ant-upload-drag input[type="file"]');
-    if (fileInput) {
-      fileInput.click();
-    } else {
-      message.error("Could not find upload input element.");
-    }
-  };
-
-  const renderAiAnalysisPanel = () => {
-    if (!currentAiAnalysis) {
-      return (
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justify: 'center',
-          height: '100%',
-          padding: '80px 20px',
-          textAlign: 'center',
-          background: 'rgba(255,255,255,0.01)',
-          border: '1px dashed rgba(255,255,255,0.05)',
-          borderRadius: '8px'
-        }}>
-          <RobotOutlined style={{ fontSize: 40, color: 'rgba(99,102,241,0.15)', marginBottom: 12 }} />
-          <Text strong style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 4 }}>
-            Awaiting AI Analysis
-          </Text>
-          <Text type="secondary" style={{ color: '#64748b', fontSize: 11, maxWidth: 220, display: 'inline-block', lineHeight: 1.4 }}>
-            Upload a complaint PDF to run the automated AI triage, risk scoring, and parameter verification.
-          </Text>
-        </div>
-      );
-    }
-
-    const data = currentAiAnalysis.extractedData || {};
-    const confidence = currentAiAnalysis.confidenceScores || {};
-    
-    const confidenceValues = Object.values(confidence);
-    const avgConfidence = confidenceValues.length > 0
-      ? Math.round((confidenceValues.reduce((sum, val) => sum + val, 0) / confidenceValues.length) * 100)
-      : 85;
-
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', overflowY: 'auto', paddingRight: 4 }}>
-        <Title level={5} style={{ color: '#818cf8', margin: '0 0 4px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <RobotOutlined /> AI Analysis & Verification
-        </Title>
-
-        {/* Average Confidence Gauge */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-            <Text style={{ color: '#9ca3af', fontSize: 11 }}>Extraction Confidence</Text>
-            <Text strong style={{ color: avgConfidence >= 80 ? '#10b981' : '#f59e0b', fontSize: 12 }}>{avgConfidence}% Avg</Text>
-          </div>
-          <Progress 
-            percent={avgConfidence} 
-            size="small" 
-            strokeColor={{
-              '0%': '#f59e0b',
-              '100%': '#10b981',
-            }} 
-            trailColor="rgba(255,255,255,0.05)" 
-            showInfo={false}
-          />
-        </Card>
-
-        {/* Complaint Summary */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(99, 102, 241, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />
-            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Complaint Summary</Text>
-          </div>
-          <Paragraph style={{ color: '#cbd5e1', fontSize: 11, margin: 0, lineHeight: 1.4 }}>
-            {data.summary || 'No summary generated.'}
-          </Paragraph>
-        </Card>
-
-        {/* Risk Assessment */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} />
-            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Risk Assessment</Text>
-          </div>
-          <Paragraph style={{ color: '#cbd5e1', fontSize: 11, margin: 0, lineHeight: 1.4 }}>
-            {data.riskAssessment || 'No risk assessment generated.'}
-          </Paragraph>
-        </Card>
-
-        {/* Severity & Priority */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <Text style={{ color: '#9ca3af', fontSize: 10, display: 'block', marginBottom: 4 }}>✓ Severity</Text>
-              <Tag color={data.severity === 'High' ? 'orange' : data.severity === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600, fontSize: 10 }}>
-                {String(data.severity || 'Medium').toUpperCase()}
-              </Tag>
-            </div>
-            <div style={{ flex: 1 }}>
-              <Text style={{ color: '#9ca3af', fontSize: 10, display: 'block', marginBottom: 4 }}>✓ Priority</Text>
-              <Tag color={data.priority === 'Critical' ? 'red' : data.priority === 'High' ? 'orange' : data.priority === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600, fontSize: 10 }}>
-                {String(data.priority || 'Medium').toUpperCase()}
-              </Tag>
-            </div>
-          </div>
-        </Card>
-
-        {/* Extracted Product Details */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
-            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Extracted Product Details</Text>
-          </div>
-          <Descriptions column={1} size="small" labelStyle={{ color: '#64748b', fontSize: 10 }} contentStyle={{ color: '#cbd5e1', fontSize: 11 }}>
-            <Descriptions.Item label="Name">{data.productName || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Strength">{data.productStrength || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Batch">{data.batchNumber || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Mfg Date">{data.manufacturingDate || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Exp Date">{data.expiryDate || 'N/A'}</Descriptions.Item>
-          </Descriptions>
-        </Card>
-
-        {/* AI Recommendations */}
-        <Card style={{ background: '#111827', border: '1px solid rgba(16, 185, 129, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
-            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ AI Recommendations</Text>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div>
-              <Text strong style={{ color: '#10b981', fontSize: 10, display: 'block', marginBottom: 2 }}>Suggested Root Cause</Text>
-              <Paragraph style={{ color: '#cbd5e1', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
-                {data.rootCause || 'Root cause recommendations unavailable.'}
-              </Paragraph>
-            </div>
-            <div>
-              <Text strong style={{ color: '#10b981', fontSize: 10, display: 'block', marginBottom: 2 }}>Suggested CAPA</Text>
-              <Paragraph style={{ color: '#cbd5e1', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
-                {data.capa || 'CAPA recommendations unavailable.'}
-              </Paragraph>
-            </div>
-          </div>
-        </Card>
-      </div>
-    );
-  };
-
-
 
   // Ant Design Table Columns for Complaints
   const columns = [
@@ -1028,7 +874,6 @@ function AppContent() {
         onClose={() => {
           setIsNewDrawerOpen(false);
           form.resetFields();
-          setCurrentAiAnalysis(null);
           setHasFileUploaded(false);
           setUploadedFileName('');
         }}
@@ -1038,29 +883,25 @@ function AppContent() {
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', borderTop: '1px solid #1f2937' }}>
             <Button
               type="default"
-              onClick={handleAnalyzeButtonClick}
-              disabled={isAnalyzing}
-              icon={<RobotOutlined />}
+              icon={<UploadOutlined />}
               style={{
                 borderColor: '#6366f1',
                 color: '#818cf8',
                 background: 'rgba(99, 102, 241, 0.05)'
               }}
             >
-              {isAnalyzing ? 'Analyzing...' : hasFileUploaded ? 'Re-Analyze Complaint' : 'Upload & Analyze PDF'}
+              {hasFileUploaded ? 'PDF Selected' : 'Upload PDF'}
             </Button>
             <Space>
               <Button onClick={() => {
                 setIsNewDrawerOpen(false);
                 form.resetFields();
-                setCurrentAiAnalysis(null);
                 setHasFileUploaded(false);
                 setUploadedFileName('');
               }}>Cancel</Button>
               <Button
                 type="primary"
                 onClick={() => form.submit()}
-                disabled={isAnalyzing}
                 icon={<CheckCircleOutlined />}
                 style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', border: 0, fontWeight: 600 }}
               >
@@ -1082,7 +923,6 @@ function AppContent() {
                 accept=".pdf"
                 maxCount={1}
                 showUploadList={false}
-                disabled={isAnalyzing}
                 beforeUpload={async (file) => {
                   if (!file) return false;
                   const extension = file.name.split('.').pop().toLowerCase();
@@ -1096,45 +936,10 @@ function AppContent() {
                     return false;
                   }
 
-                  // Trigger AI Auto-analysis
-                  setIsAnalyzing(true);
-                  setHasFileUploaded(false);
                   setUploadedFileName(file.name);
-                  
-                  const hideMessage = message.loading('Uploading and analyzing PDF with AI...', 0);
-                  
-                  try {
-                    const result = await analyzeFile(file);
-                    hideMessage();
-                    message.success('Complaint analyzed successfully.');
-                    
-                    // Auto-fill form values
-                    const data = result.extractedData || {};
-                    form.setFieldsValue({
-                      customer: data.customerName || '',
-                      email: data.customerEmail || '',
-                      company: data.companyName || '',
-                      product: data.productName || '',
-                      strength: data.productStrength || '',
-                      batch: data.batchNumber || '',
-                      mfgDate: data.manufacturingDate ? dayjs(data.manufacturingDate) : null,
-                      expDate: data.expiryDate ? dayjs(data.expiryDate) : null,
-                      category: data.complaintType || undefined,
-                      date: data.complaintDate ? dayjs(data.complaintDate) : dayjs(),
-                      description: data.complaintDescription || '',
-                      severity: data.severity || undefined,
-                      priority: data.priority || undefined,
-                    });
-                    
-                    setCurrentAiAnalysis(result);
-                    setHasFileUploaded(true);
-                  } catch (err) {
-                    hideMessage();
-                    message.error(err.message || 'Failed to analyze PDF file.');
-                    setUploadedFileName('');
-                  } finally {
-                    setIsAnalyzing(false);
-                  }
+                  setHasFileUploaded(true);
+                  message.success('PDF uploaded successfully. Complete the rest of the form and save.');
+
                   return false; // Prevent Ant Design default POST upload
                 }}
                 style={{
@@ -1145,21 +950,14 @@ function AppContent() {
                   transition: 'border-color 0.2s',
                 }}
               >
-                {isAnalyzing ? (
-                  <div style={{ padding: '10px 0' }}>
-                    <SyncOutlined spin style={{ fontSize: 28, color: '#6366f1', marginBottom: 12 }} />
-                    <p style={{ color: '#cbd5e1', fontSize: 13, margin: '8px 0 0 0', fontWeight: 500 }}>
-                      Analyzing complaint with AI...
-                    </p>
-                  </div>
-                ) : hasFileUploaded ? (
+                {hasFileUploaded ? (
                   <div style={{ padding: '10px 0' }}>
                     <CheckCircleOutlined style={{ fontSize: 28, color: '#10b981', marginBottom: 12 }} />
                     <p style={{ color: '#cbd5e1', fontSize: 13, margin: '8px 0 0 0', fontWeight: 600 }}>
                       PDF Ingested: {uploadedFileName}
                     </p>
                     <Text type="secondary" style={{ fontSize: 11, color: '#10b981' }}>
-                      AI analysis loaded! Click Re-Analyze or upload another PDF if needed.
+                      PDF uploaded successfully. Complete the form and save.
                     </Text>
                   </div>
                 ) : (
@@ -1230,15 +1028,9 @@ function AppContent() {
                   <Form.Item
                     name="product"
                     label="Product Name"
-                    rules={[{ required: true, message: 'Please select or enter a product' }]}
+                    rules={[{ required: true, message: 'Please enter a product name' }]}
                   >
-                    <Select placeholder="Select a product" showSearch optionFilterProp="children">
-                      <Select.Option value="Paracetamol">Paracetamol</Select.Option>
-                      <Select.Option value="Amoxicillin Capsules">Amoxicillin Capsules</Select.Option>
-                      <Select.Option value="Vitamin C Tablets">Vitamin C Tablets</Select.Option>
-                      <Select.Option value="Ibuprofen Tablets">Ibuprofen Tablets</Select.Option>
-                      <Select.Option value="Metformin">Metformin</Select.Option>
-                    </Select>
+                    <Input placeholder="e.g. Paracetamol" />
                   </Form.Item>
                 </Col>
                 <Col span={8}>
@@ -1358,9 +1150,6 @@ function AppContent() {
           </Col>
 
           {/* Right Column: AI Analysis Panel */}
-          <Col span={10} style={{ paddingLeft: 10 }}>
-            {renderAiAnalysisPanel()}
-          </Col>
         </Row>
       </Drawer>
 
