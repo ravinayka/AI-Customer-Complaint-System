@@ -134,7 +134,8 @@ function AppContent() {
   // Set up WebSocket connection for real-time notification dispatches
   useEffect(() => {
     if (isAuthenticated) {
-      const ws = new WebSocket('ws://localhost:8000/ws/notifications');
+      const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/notifications';
+      const ws = new WebSocket(wsUrl);
       ws.onmessage = (event) => {
         try {
           const messageData = JSON.parse(event.data);
