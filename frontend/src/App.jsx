@@ -1,4 +1,9 @@
 import React, { useState } from 'react';
+import dayjs from 'dayjs';
+import { Provider, useSelector, useDispatch } from 'react-redux';
+import { store } from './redux/store';
+import { addComplaint, updateComplaint } from './redux/complaintsSlice';
+import AIAssistantPanel from './components/AIAssistantPanel';
 import {
   Layout,
   Menu,
@@ -49,13 +54,19 @@ import {
   InfoCircleOutlined,
   UploadOutlined,
   FilePdfOutlined,
-  FileImageOutlined
+  FileImageOutlined,
+  EditOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  AlertOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
 
-function App() {
+function AppContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [selectedKey, setSelectedKey] = useState('1');
   const [searchText, setSearchText] = useState('');
@@ -64,79 +75,72 @@ function App() {
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [form] = Form.useForm();
 
-  // Realistic Pharmaceutical Complaints Mock Data
-  const [complaints, setComplaints] = useState([
-    {
-      key: '1',
-      id: 'CMP-0021',
-      product: 'Paracetamol 500mg',
-      batch: 'PR500-2401',
-      customer: 'City Pharmacy Group',
-      risk: 'Medium',
-      status: 'In Review',
-      date: '2026-07-28',
-      description: 'Packaging discoloration observed on the outer seal of Batch PR500-2401. Box is structurally sound but label prints appear faded.',
-      reporter: 'Dr. Alice Vance',
-      contact: 'alice.vance@citypharmacy.com',
-      qty: 500
-    },
-    {
-      key: '2',
-      id: 'CMP-0022',
-      product: 'Amoxicillin Capsules',
-      batch: 'AMX250-2311',
-      customer: 'Metro Health Clinic',
-      risk: 'Critical',
-      status: 'Open',
-      date: '2026-07-27',
-      description: 'Patient reported gastrointestinal discomfort and mild skin rash after taking capsules from blister pack. Suspected thermal degradation during storage/transport.',
-      reporter: 'Nurse Jack Thompson',
-      contact: 'j.thompson@metrohealth.org',
-      qty: 120
-    },
-    {
-      key: '3',
-      id: 'CMP-0023',
-      product: 'Vitamin C Tablets',
-      batch: 'VTC100-2405',
-      customer: 'Wellness Center Retail',
-      risk: 'Low',
-      status: 'Closed',
-      date: '2026-07-25',
-      description: 'Customer returned bottle due to missing desiccant pouch inside. No visible product deterioration or defects.',
-      reporter: 'Mark Henderson',
-      contact: 'm.henderson@wellnesscenter.com',
-      qty: 15
-    },
-    {
-      key: '4',
-      id: 'CMP-0024',
-      product: 'Ibuprofen Tablets',
-      batch: 'IBP400-2398',
-      customer: 'Apex Distributors',
-      risk: 'High',
-      status: 'In Review',
-      date: '2026-07-24',
-      description: 'Cracked tablets discovered in multiple bottles of the batch. Potential issue with compression pressure in manufacturing press or binder concentration.',
-      reporter: 'QC Lead Bob Roberts',
-      contact: 'b.roberts@apexdist.com',
-      qty: 1000
-    },
-    {
-      key: '5',
-      id: 'CMP-0025',
-      product: 'Metformin 500mg',
-      batch: 'MET500-2402',
-      customer: 'Valley Pharmacy',
-      risk: 'Medium',
-      status: 'Open',
-      date: '2026-07-23',
-      description: 'Odd smell (fishy odor) reported upon opening the bulk bottle. Requesting chemical analysis of the tablet coating agent.',
-      reporter: 'Pharmacist Chloe Yang',
-      contact: 'chloe.y@valleyrx.com',
-      qty: 250
+  // Inline editing states for drawer quick-edit
+  const [isInlineEditing, setIsInlineEditing] = useState(false);
+  const [inlineBatch, setInlineBatch] = useState('');
+  const [inlineMfgDate, setInlineMfgDate] = useState(null);
+  const [inlineDesc, setInlineDesc] = useState('');
+
+  // Sandbox parser states
+  const [sandboxText, setSandboxText] = useState('');
+  const [isSandboxAnalyzing, setIsSandboxAnalyzing] = useState(false);
+  const [sandboxResult, setSandboxResult] = useState(null);
+
+  // Connect to Redux store
+  const complaints = useSelector((state) => state.complaints.list);
+  const dispatch = useDispatch();
+
+  // QA Assistant Validation Rules Engine
+  const getQAAnalysis = (complaint) => {
+    if (!complaint) return { suggestions: [], risk: 'Low', suggestedPriority: 'Low', hasIssues: false };
+    
+    const suggestions = [];
+    
+    // 1. Missing Batch Number
+    const isMissingBatch = !complaint.batch || complaint.batch.trim() === '' || complaint.batch === 'N/A' || complaint.batch === 'None';
+    if (isMissingBatch) {
+      suggestions.push('Missing Batch Number');
     }
-  ]);
+
+    // 2. Missing Manufacturing Date
+    const isMissingMfgDate = !complaint.mfgDate;
+    if (isMissingMfgDate) {
+      suggestions.push('Missing Manufacturing Date');
+    }
+
+    // 3. Complaint not complete
+    const isDescriptionShort = !complaint.description || complaint.description.trim().length < 50;
+    if (isDescriptionShort) {
+      suggestions.push('Complaint not complete');
+    }
+
+    let risk = complaint.risk || 'Low';
+    let suggestedPriority = risk;
+
+    // Escalation: High/Critical risk + QA issues = Critical Priority
+    if ((risk === 'High' || risk === 'Critical') && (isMissingBatch || isMissingMfgDate || isDescriptionShort)) {
+      suggestedPriority = 'Critical';
+    } else if (risk === 'Critical') {
+      suggestedPriority = 'Critical';
+    }
+
+    return {
+      suggestions,
+      risk,
+      suggestedPriority,
+      hasIssues: suggestions.length > 0
+    };
+  };
+
+  // Open drawer helper that handles inline state initialization
+  const handleOpenDetail = (record) => {
+    setSelectedComplaint(record);
+    setInlineBatch(record.batch || '');
+    setInlineMfgDate(record.mfgDate ? dayjs(record.mfgDate) : null);
+    setInlineDesc(record.description || '');
+    setIsInlineEditing(false);
+    setIsDetailDrawerOpen(true);
+  };
 
   // Sidebar Menu Items
   const menuItems = [
@@ -189,7 +193,8 @@ function App() {
       descLower.includes('smell') || 
       descLower.includes('odor') || 
       descLower.includes('missing') ||
-      catLower.includes('efficacy')
+      catLower.includes('efficacy') ||
+      descLower.includes('bad')
     ) {
       autoRisk = 'High';
     } else if (
@@ -203,7 +208,7 @@ function App() {
       key: String(complaints.length + 1),
       id: newId,
       product: `${values.product} ${values.strength || ''}`.trim(),
-      batch: values.batch,
+      batch: values.batch || '',
       customer: values.customer,
       risk: autoRisk,
       status: 'Open',
@@ -223,9 +228,12 @@ function App() {
     
     setTimeout(() => {
       hide();
-      setComplaints([newComplaint, ...complaints]);
+      dispatch(addComplaint(newComplaint));
       setIsNewDrawerOpen(false);
       form.resetFields();
+
+      // Run QA validation to display dynamic findings on modal completion
+      const qa = getQAAnalysis(newComplaint);
 
       // Show professional AI assessment report
       Modal.success({
@@ -240,7 +248,7 @@ function App() {
             <Descriptions column={1} size="small" labelStyle={{ color: '#9ca3af', fontWeight: 500 }} contentStyle={{ color: '#fff' }}>
               <Descriptions.Item label="Generated Ticket ID">{newId}</Descriptions.Item>
               <Descriptions.Item label="Mapped Product">{newComplaint.product}</Descriptions.Item>
-              <Descriptions.Item label="Identified Batch">{values.batch}</Descriptions.Item>
+              <Descriptions.Item label="Identified Batch">{newComplaint.batch || <span style={{ color: '#f87171' }}>None Provided</span>}</Descriptions.Item>
               <Descriptions.Item label="AI Category Map">{values.category}</Descriptions.Item>
               <Descriptions.Item label="Classified Risk">
                 <Tag color={autoRisk === 'Critical' ? 'red' : autoRisk === 'High' ? 'orange' : autoRisk === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600 }}>
@@ -248,11 +256,27 @@ function App() {
                 </Tag>
               </Descriptions.Item>
             </Descriptions>
+            {qa.hasIssues && (
+              <>
+                <Divider style={{ margin: '12px 0', borderColor: '#1f2937' }} />
+                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                  <Text strong style={{ color: '#f87171', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <WarningOutlined /> QA Warnings Flagged:
+                  </Text>
+                  <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px', color: '#fca5a5', fontSize: 12 }}>
+                    {qa.suggestions.map((s, idx) => <li key={idx}>{s}</li>)}
+                  </ul>
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#fca5a5' }}>
+                    Suggested Priority: <Tag color="red" style={{ fontWeight: 600, fontSize: 11 }}>{qa.suggestedPriority.toUpperCase()}</Tag>
+                  </div>
+                </div>
+              </>
+            )}
             <Divider style={{ margin: '12px 0', borderColor: '#1f2937' }} />
             <div style={{ background: '#111827', padding: '12px', borderRadius: '8px', border: '1px solid #1f2937' }}>
               <Text strong style={{ color: '#6366f1', fontSize: 12 }}>Automated Workflow Recommendation:</Text>
               <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.4 }}>
-                Quality defect logs have been initialized. Internal notification dispatched to manufacturing plant QA lead for batch {values.batch}.
+                Quality defect logs have been initialized. Internal notification dispatched to manufacturing plant QA lead for batch {newComplaint.batch || 'N/A'}. {qa.hasIssues ? 'Action required to resolve missing parameters.' : ''}
               </p>
             </div>
           </div>
@@ -261,6 +285,8 @@ function App() {
       });
     }, 1500); // 1.5s simulated network delay
   };
+
+
 
   // Ant Design Table Columns for Complaints
   const columns = [
@@ -272,10 +298,7 @@ function App() {
         <Text
           strong
           style={{ color: '#6366f1', cursor: 'pointer' }}
-          onClick={() => {
-            setSelectedComplaint(record);
-            setIsDetailDrawerOpen(true);
-          }}
+          onClick={() => handleOpenDetail(record)}
         >
           {text}
         </Text>
@@ -357,10 +380,7 @@ function App() {
           ghost
           icon={<EyeOutlined />}
           size="small"
-          onClick={() => {
-            setSelectedComplaint(record);
-            setIsDetailDrawerOpen(true);
-          }}
+          onClick={() => handleOpenDetail(record)}
         >
           View
         </Button>
@@ -694,10 +714,7 @@ function App() {
                           <Text type="secondary">{item.date}</Text>, 
                           <Button 
                             type="link" 
-                            onClick={() => {
-                              setSelectedComplaint(item);
-                              setIsDetailDrawerOpen(true);
-                            }}
+                            onClick={() => handleOpenDetail(item)}
                           >
                             Review
                           </Button>
@@ -773,7 +790,9 @@ function App() {
               </div>
             )}
 
-            {selectedKey !== '1' && selectedKey !== '2' && (
+            {selectedKey === '3' && <AIAssistantPanel />}
+
+            {selectedKey !== '1' && selectedKey !== '2' && selectedKey !== '3' && (
               /* Other Pages Placeholder */
               <Card bordered={false} style={{ textAlign: 'center', padding: '60px 0' }}>
                 <RobotOutlined style={{ fontSize: 64, color: '#6366f1', marginBottom: 20 }} />
@@ -823,6 +842,68 @@ function App() {
           onFinish={handleCreateComplaint}
           style={{ marginTop: 16 }}
         >
+          {/* Quick-Fill Testing Sandbox Templates */}
+          <div style={{ 
+            background: 'rgba(99, 102, 241, 0.05)', 
+            padding: '16px', 
+            borderRadius: '8px', 
+            marginBottom: 20, 
+            border: '1px dashed rgba(99, 102, 241, 0.25)' 
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <ThunderboltOutlined style={{ color: '#818cf8', fontSize: 16 }} />
+              <Text strong style={{ color: '#818cf8', fontSize: 13 }}>
+                QA Assistant Testing Sandbox
+              </Text>
+            </div>
+            <p style={{ margin: '0 0 12px 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.4 }}>
+              Instantly fill the form with custom test scenarios to trigger the QA Assistant verification logic.
+            </p>
+            <Space wrap>
+              <Button 
+                size="small" 
+                onClick={() => {
+                  form.setFieldsValue({
+                    customer: 'Care Pharmacy',
+                    email: 'jsmith@carepharmacy.org',
+                    company: 'Care Pharmacy Retailer',
+                    product: 'Ibuprofen Tablets',
+                    strength: '400mg',
+                    category: 'Quality Defect',
+                    batch: '',
+                    mfgDate: null,
+                    expDate: null,
+                    description: 'Bad tablets.'
+                  });
+                  message.success('Loaded Incomplete High-Risk Scenario!');
+                }}
+                style={{ fontSize: 11 }}
+              >
+                Load Incomplete High-Risk Ticket
+              </Button>
+              <Button 
+                size="small" 
+                onClick={() => {
+                  form.setFieldsValue({
+                    customer: 'Wellness Center Retail',
+                    email: 'm.henderson@wellnesscenter.com',
+                    company: 'Wellness Center',
+                    product: 'Vitamin C Tablets',
+                    strength: '100mg',
+                    category: 'Quality Defect',
+                    batch: 'VTC100-2405',
+                    mfgDate: dayjs('2026-05-20'),
+                    expDate: dayjs('2028-05-20'),
+                    description: 'Customer returned bottle due to missing desiccant pouch inside. No visible product deterioration or defects.'
+                  });
+                  message.success('Loaded Complete Clean Ticket!');
+                }}
+                style={{ fontSize: 11 }}
+              >
+                Load Complete Clean Ticket
+              </Button>
+            </Space>
+          </div>
           {/* Section 1: Customer Information */}
           <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>1. Customer Details</Title>
           <Row gutter={16}>
@@ -891,8 +972,8 @@ function App() {
             <Col span={8}>
               <Form.Item
                 name="batch"
-                label="Batch Number"
-                rules={[{ required: true, message: 'Please enter batch number' }]}
+                label="Batch Number (Optional)"
+                rules={[]}
               >
                 <Input placeholder="e.g. BAT-2401" />
               </Form.Item>
@@ -900,8 +981,8 @@ function App() {
             <Col span={8}>
               <Form.Item
                 name="mfgDate"
-                label="Manufacturing Date"
-                rules={[{ required: true, message: 'Please select Mfg Date' }]}
+                label="Mfg Date (Optional)"
+                rules={[]}
               >
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
@@ -909,8 +990,8 @@ function App() {
             <Col span={8}>
               <Form.Item
                 name="expDate"
-                label="Expiry Date"
-                rules={[{ required: true, message: 'Please select Exp Date' }]}
+                label="Exp Date (Optional)"
+                rules={[]}
               >
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
@@ -991,7 +1072,7 @@ function App() {
               <Button
                 type="primary"
                 onClick={() => {
-                  setComplaints(complaints.map(c => c.id === selectedComplaint.id ? { ...c, status: 'Closed' } : c));
+                  dispatch(updateComplaint({ id: selectedComplaint.id, changes: { status: 'Closed' } }));
                   setSelectedComplaint({ ...selectedComplaint, status: 'Closed' });
                   message.success(`Complaint ${selectedComplaint.id} has been marked as CLOSED.`);
                 }}
@@ -1043,6 +1124,182 @@ function App() {
 
             <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
 
+            {/* QA Assistant Suggestions Section */}
+            <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
+            
+            {(() => {
+              const qa = getQAAnalysis(selectedComplaint);
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Title level={5} style={{ margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <RobotOutlined style={{ color: '#6366f1' }} /> QA Assistant Suggestions
+                    </Title>
+                    {qa.hasIssues ? (
+                      <Badge status="warning" text={<span style={{ color: '#f59e0b', fontSize: 12 }}>Issues Pending</span>} />
+                    ) : (
+                      <Badge status="success" text={<span style={{ color: '#10b981', fontSize: 12 }}>QA Compliant</span>} />
+                    )}
+                  </div>
+                  
+                  <Card 
+                    bordered 
+                    size="small" 
+                    style={{ 
+                      background: qa.hasIssues ? 'rgba(245, 158, 11, 0.03)' : 'rgba(16, 185, 129, 0.03)', 
+                      borderColor: qa.hasIssues ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)' 
+                    }}
+                  >
+                    {!qa.hasIssues ? (
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <CheckCircleOutlined style={{ color: '#10b981', fontSize: 18 }} />
+                        <div>
+                          <Text strong style={{ color: '#fff', fontSize: 13 }}>All Quality Assurance Checks Passed</Text>
+                          <p style={{ margin: '2px 0 0 0', fontSize: 11, color: '#9ca3af' }}>
+                            Batch code and manufacturing timeline verified. Narrative is complete.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <div>
+                          <Text strong style={{ color: '#f59e0b', fontSize: 12 }}>Recommended Actions / Suggestions:</Text>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                            {qa.suggestions.map((suggestion, index) => (
+                              <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <AlertOutlined style={{ color: '#ef4444', fontSize: 12 }} />
+                                <span style={{ color: '#e5e7eb', fontSize: 12, fontWeight: 500 }}>
+                                  {suggestion}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
+
+                        <Row gutter={16}>
+                          <Col span={12}>
+                            <div style={{ fontSize: 11, color: '#9ca3af' }}>Classified Risk</div>
+                            <Tag color={qa.risk === 'Critical' ? 'red' : qa.risk === 'High' ? 'orange' : qa.risk === 'Medium' ? 'blue' : 'green'} style={{ marginTop: 4, fontWeight: 600 }}>
+                              {qa.risk.toUpperCase()}
+                            </Tag>
+                          </Col>
+                          <Col span={12}>
+                            <div style={{ fontSize: 11, color: '#9ca3af' }}>Suggested Priority</div>
+                            <Tag color={qa.suggestedPriority === 'Critical' ? 'red' : qa.suggestedPriority === 'High' ? 'orange' : qa.suggestedPriority === 'Medium' ? 'blue' : 'green'} style={{ marginTop: 4, fontWeight: 700, border: qa.suggestedPriority === 'Critical' ? '1px solid #ef4444' : 'none' }}>
+                              {qa.suggestedPriority.toUpperCase()}
+                            </Tag>
+                          </Col>
+                        </Row>
+
+                        {!isInlineEditing ? (
+                          <Button 
+                            type="primary" 
+                            size="small" 
+                            icon={<EditOutlined />}
+                            onClick={() => {
+                              setInlineBatch(selectedComplaint.batch || '');
+                              setInlineMfgDate(selectedComplaint.mfgDate ? dayjs(selectedComplaint.mfgDate) : null);
+                              setInlineDesc(selectedComplaint.description || '');
+                              setIsInlineEditing(true);
+                            }}
+                            style={{ width: 'fit-content', marginTop: 4 }}
+                          >
+                            Resolve QA Gaps
+                          </Button>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'rgba(255,255,255,0.02)', padding: 10, borderRadius: 6, border: '1px solid #1f2937' }}>
+                            <Text strong style={{ fontSize: 11, color: '#818cf8' }}>Quick Resolution Portal</Text>
+                            
+                            {/* Batch code editor */}
+                            {qa.suggestions.includes('Missing Batch Number') && (
+                              <div>
+                                <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Add Batch Number:</span>
+                                <Input 
+                                  size="small" 
+                                  placeholder="e.g. PR500-2401" 
+                                  value={inlineBatch} 
+                                  onChange={(e) => setInlineBatch(e.target.value)} 
+                                />
+                              </div>
+                            )}
+
+                            {/* Mfg date editor */}
+                            {qa.suggestions.includes('Missing Manufacturing Date') && (
+                              <div>
+                                <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Select Manufacturing Date:</span>
+                                <DatePicker 
+                                  size="small" 
+                                  style={{ width: '100%' }} 
+                                  value={inlineMfgDate}
+                                  onChange={(date) => setInlineMfgDate(date)}
+                                />
+                              </div>
+                            )}
+
+                            {/* Description expander */}
+                            {qa.suggestions.includes('Complaint not complete') && (
+                              <div>
+                                <span style={{ fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 4 }}>Expand Complaint Narrative (min 50 chars):</span>
+                                <Input.TextArea 
+                                  rows={2} 
+                                  size="small" 
+                                  placeholder="Provide descriptive clinical details, symptoms, packaging observations..." 
+                                  value={inlineDesc} 
+                                  onChange={(e) => setInlineDesc(e.target.value)} 
+                                />
+                              </div>
+                            )}
+
+                            <Space style={{ marginTop: 4 }}>
+                              <Button 
+                                type="primary" 
+                                size="small" 
+                                icon={<CheckOutlined />}
+                                onClick={() => {
+                                  dispatch(updateComplaint({
+                                    id: selectedComplaint.id,
+                                    changes: {
+                                      batch: inlineBatch,
+                                      mfgDate: inlineMfgDate ? inlineMfgDate.format('YYYY-MM-DD') : selectedComplaint.mfgDate,
+                                      description: inlineDesc
+                                    }
+                                  }));
+                                  
+                                  // Update selected complaint object locally
+                                  const updatedObj = {
+                                    ...selectedComplaint,
+                                    batch: inlineBatch,
+                                    mfgDate: inlineMfgDate ? inlineMfgDate.format('YYYY-MM-DD') : selectedComplaint.mfgDate,
+                                    description: inlineDesc
+                                  };
+                                  setSelectedComplaint(updatedObj);
+                                  setIsInlineEditing(false);
+                                  message.success('QA parameters updated and re-validated successfully!');
+                                }}
+                              >
+                                Save & Revalidate
+                              </Button>
+                              <Button 
+                                size="small" 
+                                icon={<CloseOutlined />}
+                                onClick={() => setIsInlineEditing(false)}
+                              >
+                                Cancel
+                              </Button>
+                            </Space>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              );
+            })()}
+
+            <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <Title level={5} style={{ margin: 0, color: '#fff' }}>AI Copilot Audit Logs</Title>
               <Card bordered size="small" style={{ background: 'rgba(99, 102, 241, 0.05)', borderColor: 'rgba(99, 102, 241, 0.2)' }}>
@@ -1053,7 +1310,7 @@ function App() {
                     <br />
                     <Text type="secondary" style={{ fontSize: 11, color: '#9ca3af' }}>AI Classification Audit • Ran on {selectedComplaint.date}</Text>
                     <p style={{ margin: '8px 0 0 0', color: '#cbd5e1', fontSize: 12 }}>
-                      Automated pipeline classified complaint sentiment context as <strong>{selectedComplaint.risk}</strong> and successfully mapped keywords: "{selectedComplaint.product.split(' ')[0]}", "{selectedComplaint.batch.split('-')[0]}". 
+                      Automated pipeline classified complaint sentiment context as <strong>{selectedComplaint.risk}</strong> and successfully mapped keywords: "{selectedComplaint.product.split(' ')[0]}", "{selectedComplaint.batch ? selectedComplaint.batch.split('-')[0] : 'N/A'}". 
                     </p>
                   </div>
                 </div>
@@ -1063,6 +1320,14 @@ function App() {
         )}
       </Drawer>
     </ConfigProvider>
+  );
+}
+
+function App() {
+  return (
+    <Provider store={store}>
+      <AppContent />
+    </Provider>
   );
 }
 
