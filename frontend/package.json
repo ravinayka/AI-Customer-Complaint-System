@@ -2,7 +2,7 @@
   "name": "frontend",
   "private": true,
   "version": "0.1.0",
-  "homepage": "https://ravinayaka.github.io/AI-Customer-Complaint-System/",
+  "homepage": "https://ravinayka.github.io/AI-Customer-Complaint-System/",
   "type": "module",
   "scripts": {
     "dev": "vite",
