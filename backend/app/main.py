@@ -232,9 +232,16 @@ app = FastAPI(
 )
 
 # Configure CORS
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this in production
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -422,15 +429,53 @@ async def analyze_text(payload: TextPayload):
 @app.post("/api/analyze-file")
 async def analyze_file(file: UploadFile = File(...)):
     filename = file.filename
+    print(f"INFO: Received file upload request. Filename: '{filename}', Content Type: '{file.content_type}'")
+    
+    # 1. Validate file extension/format: ONLY PDFs are accepted
+    if not filename.lower().endswith('.pdf') and file.content_type != 'application/pdf':
+        print(f"WARNING: Rejected file '{filename}' with invalid content type or format.")
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+    
     try:
+        # 2. Validate file size up to 10 MB
         content = await file.read()
+        file_size = len(content)
+        max_size = 10 * 1024 * 1024  # 10 MB
+        
+        if file_size > max_size:
+            print(f"WARNING: File '{filename}' size ({file_size} bytes) exceeds maximum limit of 10 MB.")
+            raise HTTPException(status_code=400, detail="File size exceeds maximum limit of 10 MB.")
+            
+        if file_size == 0:
+            print(f"WARNING: File '{filename}' is empty.")
+            raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
+            
+        print(f"INFO: Successfully read PDF '{filename}', size={file_size} bytes. Initiating text extraction...")
+        
+        # 3. Extract text
         extracted_text = extract_text_from_file(content, filename)
+        
+        if not extracted_text.strip():
+            print(f"WARNING: PDF '{filename}' contains no extractable text.")
+            raise HTTPException(status_code=400, detail="Uploaded PDF contains no extractable text or is empty.")
+            
+        print(f"INFO: Text successfully extracted. Starting QA analysis pipeline...")
+        
+        # 4. Analyze complaint narrative
         result = run_complaint_pipeline(extracted_text)
+        print(f"INFO: AI analysis completed successfully for PDF '{filename}'.")
         return result
+        
+    except HTTPException as he:
+        raise he
     except ValueError as ve:
+        print(f"ERROR: ValueError during processing: {str(ve)}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR: Unexpected exception during PDF processing: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to analyze PDF file: {str(e)}")
 
 # Settings Module Endpoints
 @app.get("/api/settings", response_model=SettingsResponse)

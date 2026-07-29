@@ -157,12 +157,18 @@ export default function AIAssistantPanel() {
   };
 
   // Handle Drag-and-drop file upload
-  const handleFileUpload = (info) => {
-    const file = info.file;
+  const handleFileUpload = (file) => {
+    if (!file) return false;
     const extension = file.name.split('.').pop().toLowerCase();
     
-    if (!['pdf', 'docx', 'txt'].includes(extension)) {
-      message.error('Unsupported file format! Please upload PDF, DOCX, or TXT documents only.');
+    if (extension !== 'pdf') {
+      message.error('Unsupported file format! Please upload PDF documents only.');
+      return false;
+    }
+
+    const isLt10M = file.size / 1024 / 1024 < 10;
+    if (!isLt10M) {
+      message.error('File size exceeds the maximum limit of 10 MB. Please upload a smaller PDF.');
       return false;
     }
 
@@ -186,15 +192,19 @@ export default function AIAssistantPanel() {
     const data = extractedResult.extractedData;
     const newId = `CMP-00${20 + complaintsList.length + 1}`;
     
+    const fullProduct = data.productStrength 
+      ? `${data.productName} ${data.productStrength}` 
+      : (data.productName || 'Unknown Product');
+
     const formattedComplaint = {
       key: String(complaintsList.length + 1),
       id: newId,
-      product: data.productName || 'Unknown Product',
+      product: fullProduct,
       batch: data.batchNumber || 'N/A',
-      customer: data.customerName || 'AI Ingested Customer',
+      customer: data.complaintSource || 'AI Ingested Customer',
       risk: data.priority || data.severity || 'Medium',
       status: 'Open',
-      date: new Date().toISOString().split('T')[0],
+      date: data.complaintDate || new Date().toISOString().split('T')[0],
       mfgDate: data.manufacturingDate || null,
       expDate: data.expiryDate || null,
       description: data.complaintDescription || 'No description provided.',
@@ -400,7 +410,7 @@ export default function AIAssistantPanel() {
               </Row>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text type="secondary" style={{ fontSize: 10, color: '#64748b' }}>
-                  Supports PDF, DOCX, and TXT files.
+                  Supports PDF files up to 10MB.
                 </Text>
                 {extractedResult && (
                   <Button
@@ -458,17 +468,73 @@ export default function AIAssistantPanel() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {/* AI Risk Assessment & Complaint Summary Cards */}
+                <Row gutter={[16, 16]}>
+                  <Col span={24}>
+                    <Card
+                      style={{
+                        background: 'rgba(99, 102, 241, 0.04)',
+                        border: '1px solid rgba(99, 102, 241, 0.15)',
+                        borderRadius: '8px'
+                      }}
+                      bodyStyle={{ padding: 16 }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <RobotOutlined style={{ color: '#818cf8', fontSize: 16 }} />
+                        <Text strong style={{ color: '#818cf8', fontSize: 13 }}>
+                          AI Complaint Summary
+                        </Text>
+                      </div>
+                      <Paragraph style={{ color: '#cbd5e1', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+                        {extractedResult.extractedData.complaintSummary || 'No summary generated.'}
+                      </Paragraph>
+                    </Card>
+                  </Col>
+                  <Col span={24}>
+                    <Card
+                      style={{
+                        background: 'rgba(239, 68, 68, 0.04)',
+                        border: '1px solid rgba(239, 68, 68, 0.15)',
+                        borderRadius: '8px'
+                      }}
+                      bodyStyle={{ padding: 16 }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <WarningOutlined style={{ color: '#f87171', fontSize: 16 }} />
+                        <Text strong style={{ color: '#f87171', fontSize: 13 }}>
+                          AI Risk Assessment
+                        </Text>
+                        <Tag 
+                          color={
+                            extractedResult.extractedData.priority === 'Critical' ? 'red' :
+                            extractedResult.extractedData.priority === 'High' ? 'orange' :
+                            extractedResult.extractedData.priority === 'Medium' ? 'blue' : 'green'
+                          }
+                          style={{ marginLeft: 'auto', fontWeight: 600, fontSize: 10 }}
+                        >
+                          {String(extractedResult.extractedData.priority || 'Medium').toUpperCase()} PRIORITY
+                        </Tag>
+                      </div>
+                      <Paragraph style={{ color: '#cbd5e1', fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+                        {extractedResult.extractedData.riskAssessment || 'No qualitative risk assessment available.'}
+                      </Paragraph>
+                    </Card>
+                  </Col>
+                </Row>
+
                 {/* Form fields review list */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {(() => {
                     const fields = [
                       { key: 'customerName', label: 'Customer Name', type: 'text' },
-                      { key: 'company', label: 'Company / Facility', type: 'text' },
+                      { key: 'complaintSource', label: 'Complaint Source', type: 'text' },
                       { key: 'productName', label: 'Product Name', type: 'text' },
+                      { key: 'productStrength', label: 'Product Strength', type: 'text' },
                       { key: 'batchNumber', label: 'Batch Number', type: 'text' },
                       { key: 'manufacturingDate', label: 'Mfg Date', type: 'date' },
                       { key: 'expiryDate', label: 'Exp Date', type: 'date' },
                       { key: 'complaintType', label: 'Complaint Type', type: 'select', options: ['Quality Defect', 'Packaging Damage', 'Inefficacy', 'Contamination', 'Adverse Reaction'] },
+                      { key: 'complaintDate', label: 'Complaint Date', type: 'date' },
                       { key: 'quantityAffected', label: 'Quantity Affected', type: 'number' },
                       { key: 'severity', label: 'Severity Rating', type: 'select', options: ['Low', 'Medium', 'High'] },
                       { key: 'priority', label: 'Priority Assignment', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] },

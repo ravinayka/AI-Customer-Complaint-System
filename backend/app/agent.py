@@ -2,8 +2,15 @@ import os
 import json
 import re
 from typing import TypedDict, Dict, Any, List
+from datetime import datetime
 from groq import Groq
 from langgraph.graph import StateGraph, END
+import logging
+
+from app.database import SessionLocal
+from app.models import Settings
+
+logger = logging.getLogger("complaint_system.agent")
 
 # Define state structure for LangGraph workflow
 class ExtractionState(TypedDict):
@@ -18,66 +25,84 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
     Highly realistic heuristic fallback parser that extracts structured fields
     from raw text using keyword mapping and regex, returning confidence scores.
     """
+    logger.info("Running local rule-based regex extraction fallback.")
     text_lower = text.lower()
     
-    # 1. Product Name Extraction
+    # 1. Product Name & Strength
     product = "Unknown Product"
     prod_conf = 0.0
+    strength = "Unknown Strength"
+    str_conf = 0.0
+    
     products = [
-        ("paracetamol 500mg", "Paracetamol 500mg"),
-        ("paracetamol", "Paracetamol"),
-        ("amoxicillin capsules", "Amoxicillin Capsules"),
-        ("amoxicillin", "Amoxicillin"),
-        ("ibuprofen tablets", "Ibuprofen Tablets"),
-        ("ibuprofen", "Ibuprofen"),
-        ("metformin 500mg", "Metformin 500mg"),
-        ("metformin", "Metformin"),
-        ("vitamin c tablets", "Vitamin C Tablets"),
-        ("vitamin c", "Vitamin C")
+        ("paracetamol 500mg", "Paracetamol", "500mg"),
+        ("paracetamol", "Paracetamol", "500mg"),
+        ("amoxicillin capsules 250mg", "Amoxicillin Capsules", "250mg"),
+        ("amoxicillin capsules", "Amoxicillin Capsules", "250mg"),
+        ("amoxicillin", "Amoxicillin", "250mg"),
+        ("ibuprofen tablets 400mg", "Ibuprofen Tablets", "400mg"),
+        ("ibuprofen tablets", "Ibuprofen Tablets", "400mg"),
+        ("ibuprofen", "Ibuprofen", "400mg"),
+        ("metformin 500mg", "Metformin 500mg", "500mg"),
+        ("metformin", "Metformin", "500mg"),
+        ("vitamin c tablets 100mg", "Vitamin C Tablets", "100mg"),
+        ("vitamin c tablets", "Vitamin C Tablets", "100mg"),
+        ("vitamin c", "Vitamin C", "100mg")
     ]
-    for key, name in products:
+    for key, name, str_val in products:
         if key in text_lower:
             product = name
             prod_conf = 0.95
+            strength = str_val
+            str_conf = 0.90
             break
+            
+    # Try custom strength regex like \d+\s*(?:mg|g|ml|mcg)
+    strength_match = re.search(r'\b(\d+\s*(?:mg|g|ml|mcg|capsules|tablets))\b', text, re.IGNORECASE)
+    if strength_match:
+        strength = strength_match.group(1)
+        str_conf = 0.95
 
-    # 2. Customer & Company Extraction
+    # 2. Customer Name & Company Name
     customer = "Unknown Customer"
     cust_conf = 0.0
     company = "Unknown Facility"
     comp_conf = 0.0
+    customer_email = "contact@facility.org"
+    email_conf = 0.0
     
-    # Names match
     names = [
-        ("alice vance", "Dr. Alice Vance", "City Pharmacy Group"),
-        ("jack thompson", "Nurse Jack Thompson", "Metro Health Clinic"),
-        ("mark henderson", "Mark Henderson", "Wellness Center Retail"),
-        ("bob roberts", "QC Lead Bob Roberts", "Apex Distributors"),
-        ("chloe yang", "Pharmacist Chloe Yang", "Valley Pharmacy"),
-        ("john smith", "Dr. John Smith", "Care Pharmacy"),
-        ("jane doe", "Dr. Jane Doe", "Mayo Clinic Pharmacy")
+        ("alice vance", "Dr. Alice Vance", "City Pharmacy Group", "alice.vance@citypharmacy.com"),
+        ("jack thompson", "Nurse Jack Thompson", "Metro Health Clinic", "j.thompson@metrohealth.org"),
+        ("mark henderson", "Mark Henderson", "Wellness Center Retail", "m.henderson@wellnesscenter.com"),
+        ("bob roberts", "QC Lead Bob Roberts", "Apex Distributors", "b.roberts@apexdist.com"),
+        ("chloe yang", "Pharmacist Chloe Yang", "Valley Pharmacy", "chloe.y@valleyrx.com"),
+        ("john smith", "Dr. John Smith", "Care Pharmacy", "jsmith@carepharmacy.org"),
+        ("jane doe", "Dr. Jane Doe", "Mayo Clinic Pharmacy", "jane.doe@mayo.edu")
     ]
-    for key, name, comp in names:
+    for key, name, comp, email in names:
         if key in text_lower:
             customer = name
             cust_conf = 0.95
             company = comp
             comp_conf = 0.90
+            customer_email = email
+            email_conf = 0.95
             break
 
-    # If no name match, try to extract email
     if customer == "Unknown Customer":
-        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+        email_match = re.search(r'([\w\.-]+)@([\w\.-]+)\.(\w+)', text)
         if email_match:
-            customer = email_match.group(0).split('@')[0].replace('.', ' ').title()
+            customer_email = email_match.group(0)
+            email_conf = 0.95
+            customer = email_match.group(1).replace('.', ' ').title()
             cust_conf = 0.60
-            company = email_match.group(0).split('@')[1].split('.')[0].title() + " Inc."
+            company = email_match.group(2).title() + " Inc."
             comp_conf = 0.50
 
     # 3. Batch Number
     batch = ""
     batch_conf = 0.0
-    # Search for patterns like BAT-2401, PR500-2401, AMX250-2311 etc.
     batch_patterns = [
         r'\bbatch\b\s+(?:number\s+|code\s+)?(?:is\s+)?([A-Za-z0-9\-]+)',
         r'\blot\b\s+(?:number\s+|code\s+)?(?:is\s+)?([A-Za-z0-9\-]+)',
@@ -95,8 +120,9 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
     mfg_conf = 0.0
     exp_date = None
     exp_conf = 0.0
+    complaint_date = datetime.now().strftime("%Y-%m-%d")
+    complaint_date_conf = 0.50
     
-    # Simple YYYY-MM-DD or MM/DD/YYYY date regex
     date_pattern = r'\b(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4})\b'
     dates = re.findall(date_pattern, text)
     if dates:
@@ -105,13 +131,14 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
         if len(dates) > 1:
             exp_date = dates[1]
             exp_conf = 0.75
+        if len(dates) > 2:
+            complaint_date = dates[2]
+            complaint_date_conf = 0.75
 
     # Look for manufacturing specific keywords
     mfg_keywords_match = re.search(r'(?:mfg|manufacturing|manufactured)\s*(?:date)?\s*(?:is|on|of)?\s*(\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4})', text_lower)
     if mfg_keywords_match:
-        # Match from text
         match_start = mfg_keywords_match.start()
-        # Find raw date string
         raw_date = re.search(date_pattern, text[match_start:])
         if raw_date:
             mfg_date = raw_date.group(0)
@@ -203,48 +230,72 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
     description = text if len(text) < 500 else text[:500] + "..."
     desc_conf = 0.98 if len(text.strip()) > 30 else 0.50
 
+    # Risk Assessment and Summary
+    risk_assessment = f"Calculated severity is {severity} and priority is {priority}."
+    if priority == "Critical" or priority == "High":
+        risk_assessment += " Immediate QA audit recommended. Potential health hazard."
+    else:
+        risk_assessment += " Standard investigation cycle. No immediate patient hazard identified."
+        
+    summary_val = f"Complaint received regarding {product} ({strength}) from {customer} at {company} due to suspected {category}."
+
     return {
         "data": {
             "customerName": customer,
-            "company": company,
+            "customerEmail": customer_email,
+            "companyName": company,
             "productName": product,
+            "productStrength": strength,
             "batchNumber": batch,
             "manufacturingDate": mfg_date,
             "expiryDate": exp_date,
-            "complaintType": category,
-            "complaintDescription": description,
             "quantityAffected": qty,
+            "complaintType": category,
+            "complaintDate": complaint_date,
+            "complaintDescription": description,
             "severity": severity,
             "priority": priority,
             "rootCause": root_cause,
-            "capa": capa
+            "capa": capa,
+            "riskAssessment": risk_assessment,
+            "summary": summary_val
         },
         "confidence": {
             "customerName": cust_conf,
-            "company": comp_conf,
+            "customerEmail": email_conf,
+            "companyName": comp_conf,
             "productName": prod_conf,
+            "productStrength": str_conf,
             "batchNumber": batch_conf,
             "manufacturingDate": mfg_conf,
             "expiryDate": exp_conf,
-            "complaintType": cat_conf,
-            "complaintDescription": desc_conf,
             "quantityAffected": qty_conf,
+            "complaintType": cat_conf,
+            "complaintDate": complaint_date_conf,
+            "complaintDescription": desc_conf,
             "severity": sev_conf,
             "priority": prio_conf,
             "rootCause": 0.85,
-            "capa": 0.85
+            "capa": 0.85,
+            "riskAssessment": 0.90,
+            "summary": 0.90
         }
     }
 
-def groq_extraction(text: str) -> Dict[str, Any]:
+def groq_extraction(text: str, settings: dict = None) -> Dict[str, Any]:
     """
-    Performs extraction using Groq SDK (Llama-3.3-70B or Gemma2-9B-it).
+    Performs extraction using Groq SDK using settings configured in DB or fallback environment.
     Returns parsed structured JSON or raises Exception.
     """
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    api_key = (settings and settings.get("groq_api_key")) or os.getenv("GROQ_API_KEY", "").strip()
+    model = (settings and settings.get("model_selection")) or "llama-3.3-70b-versatile"
+    temperature = (settings and settings.get("temperature")) or 0.1
+    max_tokens = (settings and settings.get("max_tokens")) or 1024
+
     if not api_key:
-        raise ValueError("GROQ_API_KEY environment variable is not set.")
+        raise ValueError("GROQ_API_KEY environment variable or settings key is not set.")
         
+    logger.info(f"Running Groq AI extraction using model={model}, temp={temperature}, max_tokens={max_tokens}")
     client = Groq(api_key=api_key)
     
     system_prompt = """
@@ -260,23 +311,34 @@ def groq_extraction(text: str) -> Dict[str, Any]:
     Mandatory Schema:
     {
       "customerName": {"value": string or null, "confidence": float},
-      "company": {"value": string or null, "confidence": float},
+      "customerEmail": {"value": string or null, "confidence": float},
+      "companyName": {"value": string or null, "confidence": float},
       "productName": {"value": string or null, "confidence": float},
+      "productStrength": {"value": string or null, "confidence": float},
       "batchNumber": {"value": string or null, "confidence": float},
       "manufacturingDate": {"value": "YYYY-MM-DD" or null, "confidence": float},
       "expiryDate": {"value": "YYYY-MM-DD" or null, "confidence": float},
-      "complaintType": {"value": "Quality Defect" | "Packaging Damage" | "Inefficacy" | "Contamination" | "Adverse Reaction", "confidence": float},
-      "complaintDescription": {"value": string, "confidence": float},
       "quantityAffected": {"value": integer or null, "confidence": float},
+      "complaintType": {"value": "Quality Defect" | "Packaging Damage" | "Inefficacy" | "Contamination" | "Adverse Reaction", "confidence": float},
+      "complaintDate": {"value": "YYYY-MM-DD" or null, "confidence": float},
+      "complaintDescription": {"value": string, "confidence": float},
       "severity": {"value": "Low" | "Medium" | "High", "confidence": float},
       "priority": {"value": "Low" | "Medium" | "High" | "Critical", "confidence": float},
       "rootCause": {"value": string, "confidence": float},
-      "capa": {"value": string, "confidence": float}
+      "capa": {"value": string, "confidence": float},
+      "riskAssessment": {"value": string, "confidence": float},
+      "summary": {"value": string, "confidence": float}
     }
 
     Notes:
     - For Dates, if only year/month is mentioned, default to first day of month (e.g. YYYY-MM-01).
+    - For 'complaintDate', look for when the complaint was submitted or written, or use the narrative context. If none is mentioned, return null.
+    - For 'customerEmail', look for email addresses associated with the sender or customer reporting the complaint.
+    - For 'companyName', this is the company, facility, clinic, or source pharmacy where the complaint originated.
+    - For 'productStrength', extract dosage strength (e.g., '500mg', '250mg', '10ml').
     - For 'rootCause' and 'capa', analyze the complaint category and description to suggest the most likely pharmaceutical root cause and corrective/preventive action (CAPA) recommendation.
+    - For 'riskAssessment', provide a brief qualitative evaluation of the health risk and regulatory exposure.
+    - For 'summary', write a concise one- or two-sentence summary of the main issue.
     - If Severity is High/Critical and Batch Number or Mfg Date is missing, automatically escalate Priority to 'Critical'.
     - Output ONLY valid JSON inside a code block or as raw text. Do not write markdown descriptions.
     """
@@ -286,8 +348,9 @@ def groq_extraction(text: str) -> Dict[str, Any]:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Analyze this complaint narrative:\n\n{text}"}
         ],
-        model="llama-3.3-70b-versatile", # Fallback to gemma2-9b-it if needed
-        temperature=0.1,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
         response_format={"type": "json_object"}
     )
     
@@ -312,28 +375,50 @@ def groq_extraction(text: str) -> Dict[str, Any]:
 
 # Nodes for LangGraph Workflow
 def read_document_node(state: ExtractionState) -> ExtractionState:
+    logger.info("LangGraph Node: read_document_node started.")
     state["steps"].append("Reading document...")
     return state
 
 def extract_data_node(state: ExtractionState) -> ExtractionState:
+    logger.info("LangGraph Node: extract_data_node started.")
     state["steps"].append("Extracting data...")
     raw_text = state["raw_text"]
     
+    # Try querying settings from Database
+    db_settings = {}
+    db = SessionLocal()
     try:
-        # Check if we can use Groq
-        if os.getenv("GROQ_API_KEY", "").strip():
-            result = groq_extraction(raw_text)
+        settings = db.query(Settings).first()
+        if settings:
+            db_settings = {
+                "groq_api_key": settings.groq_api_key,
+                "model_selection": settings.model_selection,
+                "temperature": settings.temperature,
+                "max_tokens": settings.max_tokens
+            }
+            logger.info(f"Loaded active settings from DB. Selected model: {settings.model_selection}")
+    except Exception as e:
+        logger.warning(f"Could not load settings from database ({str(e)}). Using environment variables.")
+    finally:
+        db.close()
+        
+    api_key = db_settings.get("groq_api_key", "").strip() or os.getenv("GROQ_API_KEY", "").strip()
+    
+    try:
+        if api_key:
+            # Temporarily configure env variable if needed
+            os.environ["GROQ_API_KEY"] = api_key
+            result = groq_extraction(raw_text, db_settings)
             state["extracted_data"] = result["data"]
             state["confidence_scores"] = result["confidence"]
-            state["steps"].append("AI analysis completed via Groq model.")
+            state["steps"].append(f"AI analysis completed via Groq model ({db_settings.get('model_selection', 'llama-3.3-70b-versatile')}).")
         else:
-            # Fallback to local rule-based regex engine
             result = parse_with_regex_fallback(raw_text)
             state["extracted_data"] = result["data"]
             state["confidence_scores"] = result["confidence"]
-            state["steps"].append("Ingested text analyzed via local QA rule engine.")
+            state["steps"].append("Ingested text analyzed via local QA rule engine (Groq API Key not configured).")
     except Exception as e:
-        # Fallback in case of network/rate-limiting error
+        logger.error(f"Groq extraction failed with error: {str(e)}. Falling back to regex.")
         result = parse_with_regex_fallback(raw_text)
         state["extracted_data"] = result["data"]
         state["confidence_scores"] = result["confidence"]
@@ -342,9 +427,9 @@ def extract_data_node(state: ExtractionState) -> ExtractionState:
     return state
 
 def analyse_complaint_node(state: ExtractionState) -> ExtractionState:
+    logger.info("LangGraph Node: analyse_complaint_node started.")
     state["steps"].append("Analysing complaint...")
     
-    # Audit rules node: make sure priority is set to Critical if Severity is High and batch code is missing
     data = state["extracted_data"]
     conf = state["confidence_scores"]
     
@@ -358,6 +443,7 @@ def analyse_complaint_node(state: ExtractionState) -> ExtractionState:
         data["priority"] = "Critical"
         conf["priority"] = 0.95
         state["steps"].append("QA Escalation triggered: Elevated priority to Critical due to High risk with missing trace logs.")
+        logger.info("QA Escalation triggered: Elevated priority to Critical due to High risk with missing trace logs.")
         
     # Ensure Root Cause & CAPA recommendations are present
     if "rootCause" not in data or not data["rootCause"]:
@@ -395,11 +481,13 @@ def analyse_complaint_node(state: ExtractionState) -> ExtractionState:
     return state
 
 def generate_response_node(state: ExtractionState) -> ExtractionState:
+    logger.info("LangGraph Node: generate_response_node started.")
     state["steps"].append("Generating response...")
     return state
 
 # Build the LangGraph workflow
 def run_complaint_pipeline(text: str) -> Dict[str, Any]:
+    logger.info("Initializing LangGraph QA complaint validation pipeline.")
     workflow = StateGraph(ExtractionState)
     
     # Define Nodes
@@ -429,8 +517,10 @@ def run_complaint_pipeline(text: str) -> Dict[str, Any]:
     
     # Run pipeline
     final_state = app.invoke(initial_state)
+    logger.info("LangGraph complaint validation pipeline completed execution.")
     return {
         "extractedData": final_state["extracted_data"],
         "confidenceScores": final_state["confidence_scores"],
         "steps": final_state["steps"]
     }
+

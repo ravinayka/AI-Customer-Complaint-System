@@ -18,6 +18,7 @@ import Auth from './pages/Auth';
 import { logout } from './redux/authSlice';
 import { fetchSettings } from './redux/settingsSlice';
 import { fetchNotificationsThunk, addNotificationFromSocket } from './redux/notificationsSlice';
+import { analyzeFile } from './services/api';
 import {
   Layout,
   Menu,
@@ -76,7 +77,8 @@ import {
   AlertOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
-  LogoutOutlined
+  LogoutOutlined,
+  SyncOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -97,10 +99,11 @@ function AppContent() {
   const [inlineMfgDate, setInlineMfgDate] = useState(null);
   const [inlineDesc, setInlineDesc] = useState('');
 
-  // Sandbox parser states
-  const [sandboxText, setSandboxText] = useState('');
-  const [isSandboxAnalyzing, setIsSandboxAnalyzing] = useState(false);
-  const [sandboxResult, setSandboxResult] = useState(null);
+  // AI Intake System States
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [currentAiAnalysis, setCurrentAiAnalysis] = useState(null);
+  const [hasFileUploaded, setHasFileUploaded] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState('');
 
   // Connect to Redux store
   const complaints = useSelector((state) => state.complaints.list);
@@ -311,118 +314,191 @@ function AppContent() {
   const recentHighRisk = complaints.filter(c => c.risk === 'High' || c.risk === 'Critical').slice(0, 3);
 
   // Handle adding new complaint with AI Analysis Simulation
+  // Handle adding new complaint
   const handleCreateComplaint = (values) => {
     const newId = `CMP-00${20 + complaints.length + 1}`;
-
-    // Simulate AI risk classification based on category and description keywords
-    let autoRisk = 'Low';
-    const descLower = (values.description || '').toLowerCase();
-    const catLower = (values.category || '').toLowerCase();
-    if (
-      descLower.includes('rash') ||
-      descLower.includes('discomfort') ||
-      descLower.includes('adverse') ||
-      descLower.includes('hospital') ||
-      catLower.includes('reaction') ||
-      catLower.includes('contamination')
-    ) {
-      autoRisk = 'Critical';
-    } else if (
-      descLower.includes('cracked') ||
-      descLower.includes('smell') ||
-      descLower.includes('odor') ||
-      descLower.includes('missing') ||
-      catLower.includes('efficacy') ||
-      descLower.includes('bad')
-    ) {
-      autoRisk = 'High';
-    } else if (
-      descLower.includes('discoloration') ||
-      catLower.includes('packaging')
-    ) {
-      autoRisk = 'Medium';
-    }
 
     const newComplaint = {
       key: String(complaints.length + 1),
       id: newId,
-      product: `${values.product} ${values.strength || ''}`.trim(),
-      batch: values.batch || '',
-      customer: values.customer,
-      risk: autoRisk,
+      product: values.strength ? `${values.product} ${values.strength}`.trim() : (values.product || 'Unknown Product'),
+      batch: values.batch || 'N/A',
+      customer: values.company || 'Unknown Customer',
+      risk: values.priority || values.severity || 'Medium',
       status: 'Open',
-      date: new Date().toISOString().split('T')[0],
-      description: values.description,
-      reporter: values.customer,
-      contact: values.email,
-      qty: 100, // mock quantity
+      date: values.date ? values.date.format('YYYY-MM-DD') : new Date().toISOString().split('T')[0],
+      description: values.description || 'No description provided.',
+      reporter: values.customer || 'AI Ingested',
+      contact: values.email || 'contact@complaint-system.ai',
+      qty: 100, // default quantity
       company: values.company,
       mfgDate: values.mfgDate ? values.mfgDate.format('YYYY-MM-DD') : null,
       expDate: values.expDate ? values.expDate.format('YYYY-MM-DD') : null,
-      category: values.category
+      category: values.category,
+      root_cause: currentAiAnalysis?.extractedData?.rootCause || '',
+      capa_recommendation: currentAiAnalysis?.extractedData?.capa || ''
     };
 
-    // Simulate AI loading state before appending
-    const hide = message.loading('AI Copilot is analyzing complaint text, metadata and files...', 0);
+    dispatch(saveComplaint(newComplaint))
+      .unwrap()
+      .then(() => {
+        setIsNewDrawerOpen(false);
+        form.resetFields();
+        setCurrentAiAnalysis(null);
+        setHasFileUploaded(false);
+        setUploadedFileName('');
+        message.success(`Successfully saved ticket ${newId} into database!`);
+      })
+      .catch((err) => {
+        message.error(`Failed to save complaint: ${err}`);
+      });
+  };
 
-    setTimeout(() => {
-      hide();
-      dispatch(saveComplaint(newComplaint));
-      setIsNewDrawerOpen(false);
-      form.resetFields();
+  const handleAnalyzeButtonClick = () => {
+    const fileInput = document.querySelector('.ant-upload-drag input[type="file"]');
+    if (fileInput) {
+      fileInput.click();
+    } else {
+      message.error("Could not find upload input element.");
+    }
+  };
 
-      // Run QA validation to display dynamic findings on modal completion
-      const qa = getQAAnalysis(newComplaint);
+  const renderAiAnalysisPanel = () => {
+    if (!currentAiAnalysis) {
+      return (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justify: 'center',
+          height: '100%',
+          padding: '80px 20px',
+          textAlign: 'center',
+          background: 'rgba(255,255,255,0.01)',
+          border: '1px dashed rgba(255,255,255,0.05)',
+          borderRadius: '8px'
+        }}>
+          <RobotOutlined style={{ fontSize: 40, color: 'rgba(99,102,241,0.15)', marginBottom: 12 }} />
+          <Text strong style={{ color: '#9ca3af', fontSize: 13, display: 'block', marginBottom: 4 }}>
+            Awaiting AI Analysis
+          </Text>
+          <Text type="secondary" style={{ color: '#64748b', fontSize: 11, maxWidth: 220, display: 'inline-block', lineHeight: 1.4 }}>
+            Upload a complaint PDF to run the automated AI triage, risk scoring, and parameter verification.
+          </Text>
+        </div>
+      );
+    }
 
-      // Show professional AI assessment report
-      Modal.success({
-        title: <span style={{ color: '#fff', fontSize: 18, fontWeight: 600 }}>AI Audit Assessment Complete</span>,
-        width: 520,
-        content: (
-          <div style={{ marginTop: 12 }}>
-            <p style={{ color: '#cbd5e1' }}>
-              The AI natural language router has completed standard triage of the submitted ticket:
-            </p>
-            <Divider style={{ margin: '12px 0', borderColor: '#1f2937' }} />
-            <Descriptions column={1} size="small" labelStyle={{ color: '#9ca3af', fontWeight: 500 }} contentStyle={{ color: '#fff' }}>
-              <Descriptions.Item label="Generated Ticket ID">{newId}</Descriptions.Item>
-              <Descriptions.Item label="Mapped Product">{newComplaint.product}</Descriptions.Item>
-              <Descriptions.Item label="Identified Batch">{newComplaint.batch || <span style={{ color: '#f87171' }}>None Provided</span>}</Descriptions.Item>
-              <Descriptions.Item label="AI Category Map">{values.category}</Descriptions.Item>
-              <Descriptions.Item label="Classified Risk">
-                <Tag color={autoRisk === 'Critical' ? 'red' : autoRisk === 'High' ? 'orange' : autoRisk === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600 }}>
-                  {autoRisk.toUpperCase()}
-                </Tag>
-              </Descriptions.Item>
-            </Descriptions>
-            {qa.hasIssues && (
-              <>
-                <Divider style={{ margin: '12px 0', borderColor: '#1f2937' }} />
-                <div style={{ background: 'rgba(239, 68, 68, 0.08)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                  <Text strong style={{ color: '#f87171', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <WarningOutlined /> QA Warnings Flagged:
-                  </Text>
-                  <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px', color: '#fca5a5', fontSize: 12 }}>
-                    {qa.suggestions.map((s, idx) => <li key={idx}>{s}</li>)}
-                  </ul>
-                  <div style={{ marginTop: 8, fontSize: 12, color: '#fca5a5' }}>
-                    Suggested Priority: <Tag color="red" style={{ fontWeight: 600, fontSize: 11 }}>{qa.suggestedPriority.toUpperCase()}</Tag>
-                  </div>
-                </div>
-              </>
-            )}
-            <Divider style={{ margin: '12px 0', borderColor: '#1f2937' }} />
-            <div style={{ background: '#111827', padding: '12px', borderRadius: '8px', border: '1px solid #1f2937' }}>
-              <Text strong style={{ color: '#6366f1', fontSize: 12 }}>Automated Workflow Recommendation:</Text>
-              <p style={{ margin: '4px 0 0 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.4 }}>
-                Quality defect logs have been initialized. Internal notification dispatched to manufacturing plant QA lead for batch {newComplaint.batch || 'N/A'}. {qa.hasIssues ? 'Action required to resolve missing parameters.' : ''}
-              </p>
+    const data = currentAiAnalysis.extractedData || {};
+    const confidence = currentAiAnalysis.confidenceScores || {};
+    
+    const confidenceValues = Object.values(confidence);
+    const avgConfidence = confidenceValues.length > 0
+      ? Math.round((confidenceValues.reduce((sum, val) => sum + val, 0) / confidenceValues.length) * 100)
+      : 85;
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', overflowY: 'auto', paddingRight: 4 }}>
+        <Title level={5} style={{ color: '#818cf8', margin: '0 0 4px 0', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <RobotOutlined /> AI Analysis & Verification
+        </Title>
+
+        {/* Average Confidence Gauge */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <Text style={{ color: '#9ca3af', fontSize: 11 }}>Extraction Confidence</Text>
+            <Text strong style={{ color: avgConfidence >= 80 ? '#10b981' : '#f59e0b', fontSize: 12 }}>{avgConfidence}% Avg</Text>
+          </div>
+          <Progress 
+            percent={avgConfidence} 
+            size="small" 
+            strokeColor={{
+              '0%': '#f59e0b',
+              '100%': '#10b981',
+            }} 
+            trailColor="rgba(255,255,255,0.05)" 
+            showInfo={false}
+          />
+        </Card>
+
+        {/* Complaint Summary */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(99, 102, 241, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366f1' }} />
+            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Complaint Summary</Text>
+          </div>
+          <Paragraph style={{ color: '#cbd5e1', fontSize: 11, margin: 0, lineHeight: 1.4 }}>
+            {data.summary || 'No summary generated.'}
+          </Paragraph>
+        </Card>
+
+        {/* Risk Assessment */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444' }} />
+            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Risk Assessment</Text>
+          </div>
+          <Paragraph style={{ color: '#cbd5e1', fontSize: 11, margin: 0, lineHeight: 1.4 }}>
+            {data.riskAssessment || 'No risk assessment generated.'}
+          </Paragraph>
+        </Card>
+
+        {/* Severity & Priority */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <Text style={{ color: '#9ca3af', fontSize: 10, display: 'block', marginBottom: 4 }}>✓ Severity</Text>
+              <Tag color={data.severity === 'High' ? 'orange' : data.severity === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600, fontSize: 10 }}>
+                {String(data.severity || 'Medium').toUpperCase()}
+              </Tag>
+            </div>
+            <div style={{ flex: 1 }}>
+              <Text style={{ color: '#9ca3af', fontSize: 10, display: 'block', marginBottom: 4 }}>✓ Priority</Text>
+              <Tag color={data.priority === 'Critical' ? 'red' : data.priority === 'High' ? 'orange' : data.priority === 'Medium' ? 'blue' : 'green'} style={{ fontWeight: 600, fontSize: 10 }}>
+                {String(data.priority || 'Medium').toUpperCase()}
+              </Tag>
             </div>
           </div>
-        ),
-        okText: 'Acknowledge & Save',
-      });
-    }, 1500); // 1.5s simulated network delay
+        </Card>
+
+        {/* Extracted Product Details */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
+            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ Extracted Product Details</Text>
+          </div>
+          <Descriptions column={1} size="small" labelStyle={{ color: '#64748b', fontSize: 10 }} contentStyle={{ color: '#cbd5e1', fontSize: 11 }}>
+            <Descriptions.Item label="Name">{data.productName || 'N/A'}</Descriptions.Item>
+            <Descriptions.Item label="Strength">{data.productStrength || 'N/A'}</Descriptions.Item>
+            <Descriptions.Item label="Batch">{data.batchNumber || 'N/A'}</Descriptions.Item>
+            <Descriptions.Item label="Mfg Date">{data.manufacturingDate || 'N/A'}</Descriptions.Item>
+            <Descriptions.Item label="Exp Date">{data.expiryDate || 'N/A'}</Descriptions.Item>
+          </Descriptions>
+        </Card>
+
+        {/* AI Recommendations */}
+        <Card style={{ background: '#111827', border: '1px solid rgba(16, 185, 129, 0.15)', borderRadius: 8 }} bodyStyle={{ padding: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
+            <Text strong style={{ color: '#fff', fontSize: 12 }}>✓ AI Recommendations</Text>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div>
+              <Text strong style={{ color: '#10b981', fontSize: 10, display: 'block', marginBottom: 2 }}>Suggested Root Cause</Text>
+              <Paragraph style={{ color: '#cbd5e1', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
+                {data.rootCause || 'Root cause recommendations unavailable.'}
+              </Paragraph>
+            </div>
+            <div>
+              <Text strong style={{ color: '#10b981', fontSize: 10, display: 'block', marginBottom: 2 }}>Suggested CAPA</Text>
+              <Paragraph style={{ color: '#cbd5e1', fontSize: 10, margin: 0, lineHeight: 1.4 }}>
+                {data.capa || 'CAPA recommendations unavailable.'}
+              </Paragraph>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
   };
 
 
@@ -971,243 +1047,344 @@ function AppContent() {
           </span>
         }
         placement="right"
-        width={640}
-        onClose={() => setIsNewDrawerOpen(false)}
+        width={1000}
+        onClose={() => {
+          setIsNewDrawerOpen(false);
+          form.resetFields();
+          setCurrentAiAnalysis(null);
+          setHasFileUploaded(false);
+          setUploadedFileName('');
+        }}
         open={isNewDrawerOpen}
         destroyOnClose
         footer={
-          <div style={{ textAlign: 'right', padding: '10px 16px', borderTop: '1px solid #1f2937' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 16px', borderTop: '1px solid #1f2937' }}>
+            <Button
+              type="default"
+              onClick={handleAnalyzeButtonClick}
+              disabled={isAnalyzing}
+              icon={<RobotOutlined />}
+              style={{
+                borderColor: '#6366f1',
+                color: '#818cf8',
+                background: 'rgba(99, 102, 241, 0.05)'
+              }}
+            >
+              {isAnalyzing ? 'Analyzing...' : hasFileUploaded ? 'Re-Analyze Complaint' : 'Upload & Analyze PDF'}
+            </Button>
             <Space>
-              <Button onClick={() => setIsNewDrawerOpen(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setIsNewDrawerOpen(false);
+                form.resetFields();
+                setCurrentAiAnalysis(null);
+                setHasFileUploaded(false);
+                setUploadedFileName('');
+              }}>Cancel</Button>
               <Button
                 type="primary"
                 onClick={() => form.submit()}
-                icon={<RobotOutlined />}
-                style={{ background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', border: 0 }}
+                disabled={isAnalyzing}
+                icon={<CheckCircleOutlined />}
+                style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', border: 0, fontWeight: 600 }}
               >
-                AI Analyze Complaint
+                Save Complaint
               </Button>
             </Space>
           </div>
         }
       >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleCreateComplaint}
-          style={{ marginTop: 16 }}
-        >
-          {/* Quick-Fill Testing Sandbox Templates */}
-          <div style={{
-            background: 'rgba(99, 102, 241, 0.05)',
-            padding: '16px',
-            borderRadius: '8px',
-            marginBottom: 20,
-            border: '1px dashed rgba(99, 102, 241, 0.25)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <ThunderboltOutlined style={{ color: '#818cf8', fontSize: 16 }} />
-              <Text strong style={{ color: '#818cf8', fontSize: 13 }}>
-                QA Assistant Testing Sandbox
+        <Row gutter={24} style={{ minHeight: 'calc(100vh - 200px)' }}>
+          {/* Left Column: PDF Ingestion Dropzone & Form fields */}
+          <Col span={14} style={{ borderRight: '1px solid rgba(255,255,255,0.05)', paddingRight: 20 }}>
+            {/* Custom Drag & Drop PDF Upload Area */}
+            <div style={{ marginBottom: 24 }}>
+              <Text strong style={{ color: '#fff', fontSize: 13, display: 'block', marginBottom: 8 }}>
+                📄 Upload Complaint Document
               </Text>
+              <Upload.Dragger
+                accept=".pdf"
+                maxCount={1}
+                showUploadList={false}
+                disabled={isAnalyzing}
+                beforeUpload={async (file) => {
+                  if (!file) return false;
+                  const extension = file.name.split('.').pop().toLowerCase();
+                  if (extension !== 'pdf') {
+                    message.error('Unsupported file format! Please upload PDF documents only.');
+                    return false;
+                  }
+                  const isLt10M = file.size / 1024 / 1024 < 10;
+                  if (!isLt10M) {
+                    message.error('File size exceeds the maximum limit of 10 MB. Please upload a smaller PDF.');
+                    return false;
+                  }
+
+                  // Trigger AI Auto-analysis
+                  setIsAnalyzing(true);
+                  setHasFileUploaded(false);
+                  setUploadedFileName(file.name);
+                  
+                  const hideMessage = message.loading('Uploading and analyzing PDF with AI...', 0);
+                  
+                  try {
+                    const result = await analyzeFile(file);
+                    hideMessage();
+                    message.success('Complaint analyzed successfully.');
+                    
+                    // Auto-fill form values
+                    const data = result.extractedData || {};
+                    form.setFieldsValue({
+                      customer: data.customerName || '',
+                      email: data.customerEmail || '',
+                      company: data.companyName || '',
+                      product: data.productName || '',
+                      strength: data.productStrength || '',
+                      batch: data.batchNumber || '',
+                      mfgDate: data.manufacturingDate ? dayjs(data.manufacturingDate) : null,
+                      expDate: data.expiryDate ? dayjs(data.expiryDate) : null,
+                      category: data.complaintType || undefined,
+                      date: data.complaintDate ? dayjs(data.complaintDate) : dayjs(),
+                      description: data.complaintDescription || '',
+                      severity: data.severity || undefined,
+                      priority: data.priority || undefined,
+                    });
+                    
+                    setCurrentAiAnalysis(result);
+                    setHasFileUploaded(true);
+                  } catch (err) {
+                    hideMessage();
+                    message.error(err.message || 'Failed to analyze PDF file.');
+                    setUploadedFileName('');
+                  } finally {
+                    setIsAnalyzing(false);
+                  }
+                  return false; // Prevent Ant Design default POST upload
+                }}
+                style={{
+                  background: 'rgba(255,255,255,0.01)',
+                  border: '1px dashed rgba(255,255,255,0.15)',
+                  borderRadius: '8px',
+                  padding: '20px 0',
+                  transition: 'border-color 0.2s',
+                }}
+              >
+                {isAnalyzing ? (
+                  <div style={{ padding: '10px 0' }}>
+                    <SyncOutlined spin style={{ fontSize: 28, color: '#6366f1', marginBottom: 12 }} />
+                    <p style={{ color: '#cbd5e1', fontSize: 13, margin: '8px 0 0 0', fontWeight: 500 }}>
+                      Analyzing complaint with AI...
+                    </p>
+                  </div>
+                ) : hasFileUploaded ? (
+                  <div style={{ padding: '10px 0' }}>
+                    <CheckCircleOutlined style={{ fontSize: 28, color: '#10b981', marginBottom: 12 }} />
+                    <p style={{ color: '#cbd5e1', fontSize: 13, margin: '8px 0 0 0', fontWeight: 600 }}>
+                      PDF Ingested: {uploadedFileName}
+                    </p>
+                    <Text type="secondary" style={{ fontSize: 11, color: '#10b981' }}>
+                      AI analysis loaded! Click Re-Analyze or upload another PDF if needed.
+                    </Text>
+                  </div>
+                ) : (
+                  <div style={{ padding: '10px 0' }}>
+                    <FilePdfOutlined style={{ fontSize: 32, color: '#6366f1', marginBottom: 12 }} />
+                    <p style={{ color: '#cbd5e1', fontSize: 13, margin: '0 0 8px 0', fontWeight: 500 }}>
+                      Drag & Drop PDF here
+                    </p>
+                    <p style={{ color: '#64748b', fontSize: 11, margin: '0 0 8px 0' }}>
+                      or
+                    </p>
+                    <Button type="primary" size="small" style={{ marginBottom: 12 }}>
+                      Choose PDF
+                    </Button>
+                    <p style={{ color: '#64748b', fontSize: 10, margin: 0 }}>
+                      Supported format: PDF only<br />Maximum size: 10 MB
+                    </p>
+                  </div>
+                )}
+              </Upload.Dragger>
             </div>
-            <p style={{ margin: '0 0 12px 0', fontSize: 11, color: '#9ca3af', lineHeight: 1.4 }}>
-              Instantly fill the form with custom test scenarios to trigger the QA Assistant verification logic.
-            </p>
-            <Space wrap>
-              <Button
-                size="small"
-                onClick={() => {
-                  form.setFieldsValue({
-                    customer: 'Care Pharmacy',
-                    email: 'jsmith@carepharmacy.org',
-                    company: 'Care Pharmacy Retailer',
-                    product: 'Ibuprofen Tablets',
-                    strength: '400mg',
-                    category: 'Quality Defect',
-                    batch: '',
-                    mfgDate: null,
-                    expDate: null,
-                    description: 'Bad tablets.'
-                  });
-                  message.success('Loaded Incomplete High-Risk Scenario!');
-                }}
-                style={{ fontSize: 11 }}
-              >
-                Load Incomplete High-Risk Ticket
-              </Button>
-              <Button
-                size="small"
-                onClick={() => {
-                  form.setFieldsValue({
-                    customer: 'Wellness Center Retail',
-                    email: 'm.henderson@wellnesscenter.com',
-                    company: 'Wellness Center',
-                    product: 'Vitamin C Tablets',
-                    strength: '100mg',
-                    category: 'Quality Defect',
-                    batch: 'VTC100-2405',
-                    mfgDate: dayjs('2026-05-20'),
-                    expDate: dayjs('2028-05-20'),
-                    description: 'Customer returned bottle due to missing desiccant pouch inside. No visible product deterioration or defects.'
-                  });
-                  message.success('Loaded Complete Clean Ticket!');
-                }}
-                style={{ fontSize: 11 }}
-              >
-                Load Complete Clean Ticket
-              </Button>
-            </Space>
-          </div>
-          {/* Section 1: Customer Information */}
-          <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>1. Customer Details</Title>
-          <Row gutter={16}>
-            <Col span={12}>
+
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={handleCreateComplaint}
+              style={{ marginTop: 16 }}
+            >
+              {/* Section 1: Customer Information */}
+              <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>1. Customer Details</Title>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="customer"
+                    label="Customer Name"
+                    rules={[{ required: true, message: 'Please enter customer name' }]}
+                  >
+                    <Input placeholder="e.g. Dr. Jane Doe" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="email"
+                    label="Customer Email"
+                    rules={[
+                      { required: true, message: 'Please enter customer email' },
+                      { type: 'email', message: 'Please enter a valid email address' }
+                    ]}
+                  >
+                    <Input placeholder="e.g. j.doe@clinic.org" />
+                  </Form.Item>
+                </Col>
+              </Row>
               <Form.Item
-                name="customer"
-                label="Customer Name"
-                rules={[{ required: true, message: 'Please enter customer name' }]}
+                name="company"
+                label="Company / Facility Name"
+                rules={[{ required: true, message: 'Please enter company or facility name' }]}
               >
-                <Input placeholder="e.g. Dr. Jane Doe" />
+                <Input placeholder="e.g. Mayo Clinic Pharmacy" />
               </Form.Item>
-            </Col>
-            <Col span={12}>
+
+              <Divider style={{ borderColor: '#1f2937' }} />
+
+              {/* Section 2: Product & Batch Information */}
+              <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>2. Product & Batch Details</Title>
+              <Row gutter={16}>
+                <Col span={16}>
+                  <Form.Item
+                    name="product"
+                    label="Product Name"
+                    rules={[{ required: true, message: 'Please select or enter a product' }]}
+                  >
+                    <Select placeholder="Select a product" showSearch optionFilterProp="children">
+                      <Select.Option value="Paracetamol">Paracetamol</Select.Option>
+                      <Select.Option value="Amoxicillin Capsules">Amoxicillin Capsules</Select.Option>
+                      <Select.Option value="Vitamin C Tablets">Vitamin C Tablets</Select.Option>
+                      <Select.Option value="Ibuprofen Tablets">Ibuprofen Tablets</Select.Option>
+                      <Select.Option value="Metformin">Metformin</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    name="strength"
+                    label="Product Strength"
+                    rules={[{ required: true, message: 'Please enter strength' }]}
+                  >
+                    <Input placeholder="e.g. 500mg" />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item
+                    name="batch"
+                    label="Batch Number (Optional)"
+                    rules={[]}
+                  >
+                    <Input placeholder="e.g. BAT-2401" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    name="mfgDate"
+                    label="Mfg Date (Optional)"
+                    rules={[]}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    name="expDate"
+                    label="Exp Date (Optional)"
+                    rules={[]}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Divider style={{ borderColor: '#1f2937' }} />
+
+              {/* Section 3: Complaint Narrative */}
+              <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>3. Complaint Case Triage</Title>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="category"
+                    label="Complaint Category"
+                    rules={[{ required: true, message: 'Please select a category' }]}
+                  >
+                    <Select placeholder="Select complaint category">
+                      <Select.Option value="Quality Defect">Quality Defect (Color/Odour/Texture)</Select.Option>
+                      <Select.Option value="Packaging Damage">Packaging / Label Damage</Select.Option>
+                      <Select.Option value="Inefficacy">Inefficacy (Drug not working)</Select.Option>
+                      <Select.Option value="Contamination">Potential Product Contamination</Select.Option>
+                      <Select.Option value="Adverse Reaction">Adverse Drug Reaction / Side Effect</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="date"
+                    label="Complaint Date"
+                    rules={[{ required: true, message: 'Please select complaint date' }]}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+
               <Form.Item
-                name="email"
-                label="Customer Email"
-                rules={[
-                  { required: true, message: 'Please enter customer email' },
-                  { type: 'email', message: 'Please enter a valid email address' }
-                ]}
+                name="description"
+                label="Complaint Description Narrative"
+                rules={[{ required: true, message: 'Please enter complaint description' }]}
               >
-                <Input placeholder="e.g. j.doe@clinic.org" />
+                <Input.TextArea rows={4} placeholder="Provide details on tablet cracks, capsule damage, odor or medical symptoms..." />
               </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item
-            name="company"
-            label="Company / Facility Name"
-            rules={[{ required: true, message: 'Please enter company or facility name' }]}
-          >
-            <Input placeholder="e.g. Mayo Clinic Pharmacy" />
-          </Form.Item>
 
-          <Divider style={{ borderColor: '#1f2937' }} />
+              <Divider style={{ borderColor: '#1f2937' }} />
 
-          {/* Section 2: Product & Batch Information */}
-          <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>2. Product & Batch Details</Title>
-          <Row gutter={16}>
-            <Col span={16}>
-              <Form.Item
-                name="product"
-                label="Product Name"
-                rules={[{ required: true, message: 'Please select a product' }]}
-              >
-                <Select placeholder="Select a product">
-                  <Select.Option value="Paracetamol">Paracetamol</Select.Option>
-                  <Select.Option value="Amoxicillin Capsules">Amoxicillin Capsules</Select.Option>
-                  <Select.Option value="Vitamin C Tablets">Vitamin C Tablets</Select.Option>
-                  <Select.Option value="Ibuprofen Tablets">Ibuprofen Tablets</Select.Option>
-                  <Select.Option value="Metformin">Metformin</Select.Option>
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item
-                name="strength"
-                label="Product Strength"
-                rules={[{ required: true, message: 'Please enter strength' }]}
-              >
-                <Input placeholder="e.g. 500mg" />
-              </Form.Item>
-            </Col>
-          </Row>
+              {/* Section 4: Triage Assessment */}
+              <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>4. Triage Assessment</Title>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="severity"
+                    label="Severity"
+                    rules={[{ required: true, message: 'Please select severity' }]}
+                  >
+                    <Select placeholder="Select severity">
+                      <Select.Option value="Low">Low</Select.Option>
+                      <Select.Option value="Medium">Medium</Select.Option>
+                      <Select.Option value="High">High</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="priority"
+                    label="Priority"
+                    rules={[{ required: true, message: 'Please select priority' }]}
+                  >
+                    <Select placeholder="Select priority">
+                      <Select.Option value="Low">Low</Select.Option>
+                      <Select.Option value="Medium">Medium</Select.Option>
+                      <Select.Option value="High">High</Select.Option>
+                      <Select.Option value="Critical">Critical</Select.Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Form>
+          </Col>
 
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item
-                name="batch"
-                label="Batch Number (Optional)"
-                rules={[]}
-              >
-                <Input placeholder="e.g. BAT-2401" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item
-                name="mfgDate"
-                label="Mfg Date (Optional)"
-                rules={[]}
-              >
-                <DatePicker style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item
-                name="expDate"
-                label="Exp Date (Optional)"
-                rules={[]}
-              >
-                <DatePicker style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Divider style={{ borderColor: '#1f2937' }} />
-
-          {/* Section 3: Complaint Narrative */}
-          <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>3. Complaint Case Triage</Title>
-          <Form.Item
-            name="category"
-            label="Complaint Category"
-            rules={[{ required: true, message: 'Please select a category' }]}
-          >
-            <Select placeholder="Select complaint category">
-              <Select.Option value="Quality Defect">Quality Defect (Color/Odour/Texture)</Select.Option>
-              <Select.Option value="Packaging Damage">Packaging / Label Damage</Select.Option>
-              <Select.Option value="Inefficacy">Inefficacy (Drug not working)</Select.Option>
-              <Select.Option value="Contamination">Potential Product Contamination</Select.Option>
-              <Select.Option value="Adverse Reaction">Adverse Drug Reaction / Side Effect</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="description"
-            label="Complaint Description Narrative"
-            rules={[{ required: true, message: 'Please enter complaint description' }]}
-          >
-            <Input.TextArea rows={4} placeholder="Provide details on tablet cracks, capsule damage, odor or medical symptoms..." />
-          </Form.Item>
-
-          <Divider style={{ borderColor: '#1f2937' }} />
-
-          {/* Section 4: Attachments */}
-          <Title level={5} style={{ color: '#6366f1', marginBottom: 16 }}>4. Supporting Attachments</Title>
-
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item name="pdfFile" label="PDF Documents">
-                <Upload accept=".pdf" maxCount={1} beforeUpload={() => false}>
-                  <Button icon={<FilePdfOutlined />} style={{ width: '100%' }}>PDF File</Button>
-                </Upload>
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="imageFile" label="Defect Image">
-                <Upload accept="image/*" maxCount={1} beforeUpload={() => false} listType="picture">
-                  <Button icon={<FileImageOutlined />} style={{ width: '100%' }}>Image</Button>
-                </Upload>
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="textFile" label="Email / Log File">
-                <Upload accept=".txt,.eml,.msg" maxCount={1} beforeUpload={() => false}>
-                  <Button icon={<FileTextOutlined />} style={{ width: '100%' }}>Text/Email</Button>
-                </Upload>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+          {/* Right Column: AI Analysis Panel */}
+          <Col span={10} style={{ paddingLeft: 10 }}>
+            {renderAiAnalysisPanel()}
+          </Col>
+        </Row>
       </Drawer>
 
       {/* Complaint Detail Drawer */}
