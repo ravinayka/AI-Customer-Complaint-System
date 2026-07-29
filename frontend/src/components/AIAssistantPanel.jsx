@@ -37,7 +37,7 @@ import {
   FileWordOutlined
 } from '@ant-design/icons';
 import {
-  addComplaint,
+  saveComplaint,
   addChatMessage,
   setExtractingStatus,
   setExtractionProgress,
@@ -192,7 +192,7 @@ export default function AIAssistantPanel() {
       product: data.productName || 'Unknown Product',
       batch: data.batchNumber || 'N/A',
       customer: data.customerName || 'AI Ingested Customer',
-      risk: data.severity || 'Medium',
+      risk: data.priority || data.severity || 'Medium',
       status: 'Open',
       date: new Date().toISOString().split('T')[0],
       mfgDate: data.manufacturingDate || null,
@@ -201,12 +201,20 @@ export default function AIAssistantPanel() {
       reporter: data.customerName || 'AI Copilot Ingestion',
       contact: 'parsed@complaint-system.ai',
       qty: data.quantityAffected || 0,
-      category: data.complaintType || 'Quality Defect'
+      category: data.complaintType || 'Quality Defect',
+      root_cause: data.rootCause || '',
+      capa_recommendation: data.capa || ''
     };
 
-    dispatch(addComplaint(formattedComplaint));
-    dispatch(resetExtractionState());
-    message.success(`Successfully saved ticket ${newId} into the system database!`);
+    dispatch(saveComplaint(formattedComplaint))
+      .unwrap()
+      .then(() => {
+        dispatch(resetExtractionState());
+        message.success(`Successfully saved ticket ${newId} into database!`);
+      })
+      .catch((err) => {
+        message.error(`Failed to save complaint: ${err}`);
+      });
   };
 
   // Start inline editing of values
@@ -464,6 +472,8 @@ export default function AIAssistantPanel() {
                       { key: 'quantityAffected', label: 'Quantity Affected', type: 'number' },
                       { key: 'severity', label: 'Severity Rating', type: 'select', options: ['Low', 'Medium', 'High'] },
                       { key: 'priority', label: 'Priority Assignment', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] },
+                      { key: 'rootCause', label: 'AI Root Cause Analysis', type: 'textarea' },
+                      { key: 'capa', label: 'AI CAPA Recommendations', type: 'textarea' },
                       { key: 'complaintDescription', label: 'Description Narrative', type: 'textarea' }
                     ];
 

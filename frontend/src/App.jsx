@@ -1,9 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import dayjs from 'dayjs';
 import { Provider, useSelector, useDispatch } from 'react-redux';
 import { store } from './redux/store';
-import { addComplaint, updateComplaint } from './redux/complaintsSlice';
+import { 
+  addComplaint, 
+  updateComplaint, 
+  fetchComplaints, 
+  saveComplaint, 
+  updateComplaintBackendThunk,
+  setActiveComplaintId
+} from './redux/complaintsSlice';
 import AIAssistantPanel from './components/AIAssistantPanel';
+import Settings from './pages/Settings';
+import Reports from './pages/Reports';
+import Notifications from './pages/Notifications';
+import { fetchSettings } from './redux/settingsSlice';
+import { fetchNotificationsThunk, addNotificationFromSocket } from './redux/notificationsSlice';
 import {
   Layout,
   Menu,
@@ -31,7 +43,8 @@ import {
   Divider,
   message,
   Upload,
-  DatePicker
+  DatePicker,
+  notification
 } from 'antd';
 import {
   DashboardOutlined,
@@ -89,6 +102,96 @@ function AppContent() {
   // Connect to Redux store
   const complaints = useSelector((state) => state.complaints.list);
   const dispatch = useDispatch();
+  const settingsData = useSelector((state) => state.settings.data);
+  const unreadCount = useSelector((state) => state.notifications.unreadCount);
+  const activeComplaintId = useSelector((state) => state.complaints.activeComplaintId);
+
+  useEffect(() => {
+    dispatch(fetchSettings());
+    dispatch(fetchComplaints());
+  }, [dispatch]);
+
+  // Fetch notifications and set up 30-second poll interval
+  useEffect(() => {
+    dispatch(fetchNotificationsThunk());
+    const interval = setInterval(() => {
+      dispatch(fetchNotificationsThunk());
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [dispatch]);
+
+  // Set up WebSocket connection for real-time notification dispatches
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:8000/ws/notifications');
+    ws.onmessage = (event) => {
+      try {
+        const messageData = JSON.parse(event.data);
+        if (messageData.event === 'new_notification') {
+          const payload = messageData.data;
+          dispatch(addNotificationFromSocket(payload));
+          notification.info({
+            message: payload.title,
+            description: payload.message,
+            icon: getNotificationIcon(payload.type),
+            placement: 'topRight',
+            duration: 5,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to parse WebSocket message:", err);
+      }
+    };
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+    return () => {
+      ws.close();
+    };
+  }, [dispatch]);
+
+  // Navigate to complaint details drawer when notification link clicked
+  useEffect(() => {
+    if (activeComplaintId) {
+      const comp = complaints.find(c => c.id === activeComplaintId);
+      if (comp) {
+        setSelectedKey('2'); // Switch to Customer Complaints Tab
+        handleOpenDetail(comp); // Open detail drawer
+        dispatch(setActiveComplaintId(null));
+      }
+    }
+  }, [activeComplaintId, complaints, dispatch]);
+
+  const getNotificationIcon = (type) => {
+    switch (type) {
+      case 'new_complaint':
+        return <FileTextOutlined style={{ color: '#3b82f6' }} />;
+      case 'assigned':
+        return <UserOutlined style={{ color: '#10b981' }} />;
+      case 'updated':
+        return <EditOutlined style={{ color: '#6366f1' }} />;
+      case 'closed':
+        return <CheckCircleOutlined style={{ color: '#10b981' }} />;
+      case 'high_risk':
+        return <WarningOutlined style={{ color: '#f59e0b' }} />;
+      case 'critical':
+        return <AlertOutlined style={{ color: '#ef4444' }} />;
+      default:
+        return <BellOutlined style={{ color: '#9ca3af' }} />;
+    }
+  };
+
+  const isDark = settingsData.theme_mode === 'dark';
+  const themeColors = {
+    bgBase: isDark ? '#0b0f19' : '#f8fafc',
+    bgContainer: isDark ? '#151b2c' : '#ffffff',
+    bgHeaderSider: isDark ? '#111827' : '#ffffff',
+    border: isDark ? '#1f2937' : '#e2e8f0',
+    textMain: isDark ? '#ffffff' : '#0f172a',
+    textSub: isDark ? '#9ca3af' : '#475569',
+    textMuted: isDark ? '#64748b' : '#94a3b8',
+    cardBorder: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+    activeBg: isDark ? '#1e293b' : '#f1f5f9'
+  };
 
   // QA Assistant Validation Rules Engine
   const getQAAnalysis = (complaint) => {
@@ -148,7 +251,14 @@ function AppContent() {
     { key: '2', icon: <FileTextOutlined />, label: 'Customer Complaints' },
     { key: '3', icon: <RobotOutlined />, label: 'AI Copilot' },
     { key: '4', icon: <BarChartOutlined />, label: 'Reports' },
-    { key: '5', icon: <SettingOutlined />, label: 'Settings' }
+    { key: '5', icon: <SettingOutlined />, label: 'Settings' },
+    { key: '6', icon: <BellOutlined />, label: (
+        <Space>
+          Notifications
+          {unreadCount > 0 && <Badge count={unreadCount} style={{ backgroundColor: '#ef4444' }} />}
+        </Space>
+      ) 
+    }
   ];
 
   // Filtering complaints by search text
@@ -228,7 +338,7 @@ function AppContent() {
     
     setTimeout(() => {
       hide();
-      dispatch(addComplaint(newComplaint));
+      dispatch(saveComplaint(newComplaint));
       setIsNewDrawerOpen(false);
       form.resetFields();
 
@@ -391,22 +501,22 @@ function AppContent() {
   return (
     <ConfigProvider
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: settingsData.theme_mode === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
           colorPrimary: '#6366f1', // Indigo
-          colorBgBase: '#0b0f19', // Deep dark slate
-          colorBgContainer: '#151b2c', // Slightly lighter slate for cards/containers
+          colorBgBase: themeColors.bgBase,
+          colorBgContainer: themeColors.bgContainer,
           borderRadius: 12,
           fontFamily: 'Outfit, Inter, system-ui, -apple-system, sans-serif',
         },
         components: {
           Layout: {
-            headerBg: '#111827',
-            siderBg: '#111827',
+            headerBg: themeColors.bgHeaderSider,
+            siderBg: themeColors.bgHeaderSider,
           },
           Menu: {
-            itemBg: '#111827',
-            itemSelectedBg: '#1e293b',
+            itemBg: themeColors.bgHeaderSider,
+            itemSelectedBg: themeColors.activeBg,
           }
         }
       }}
@@ -418,8 +528,9 @@ function AppContent() {
           collapsible
           collapsed={collapsed}
           width={260}
+          theme={settingsData.theme_mode === 'dark' ? 'dark' : 'light'}
           style={{
-            borderRight: '1px solid #1f2937',
+            borderRight: `1px solid ${themeColors.border}`,
             boxShadow: '4px 0 24px rgba(0,0,0,0.15)'
           }}
         >
@@ -429,8 +540,8 @@ function AppContent() {
             display: 'flex',
             alignItems: 'center',
             padding: collapsed ? '0 24px' : '0 20px',
-            borderBottom: '1px solid #1f2937',
-            background: '#111827',
+            borderBottom: `1px solid ${themeColors.border}`,
+            background: themeColors.bgHeaderSider,
             gap: 12,
             transition: 'all 0.2s'
           }}>
@@ -450,7 +561,7 @@ function AppContent() {
               A
             </div>
             {!collapsed && (
-              <Title level={4} style={{ margin: 0, background: 'linear-gradient(135deg, #fff 0%, #cbd5e1 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              <Title level={4} style={{ margin: 0, background: settingsData.theme_mode === 'dark' ? 'linear-gradient(135deg, #fff 0%, #cbd5e1 100%)' : 'linear-gradient(135deg, #0f172a 0%, #475569 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 Antigravity AI
               </Title>
             )}
@@ -458,7 +569,7 @@ function AppContent() {
 
           {/* Navigation Menu */}
           <Menu
-            theme="dark"
+            theme={settingsData.theme_mode === 'dark' ? 'dark' : 'light'}
             mode="inline"
             selectedKeys={[selectedKey]}
             items={menuItems}
@@ -478,7 +589,8 @@ function AppContent() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            borderBottom: '1px solid #1f2937',
+            borderBottom: `1px solid ${themeColors.border}`,
+            background: themeColors.bgHeaderSider,
             boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
             zIndex: 10
           }}>
@@ -496,35 +608,37 @@ function AppContent() {
                   background: 'rgba(255,255,255,0.03)'
                 }
               })}
-              <Title level={4} style={{ margin: 0, fontWeight: 500, color: '#f3f4f6' }}>
+              <Title level={4} style={{ margin: 0, fontWeight: 500, color: themeColors.textMain }}>
                 AI Customer Complaint Management System
               </Title>
             </Space>
 
             <Space size={20}>
-              <Badge count={openCount + criticalCount} overflowCount={9} style={{ boxShadow: 'none' }}>
+              <Badge count={unreadCount} overflowCount={99} style={{ boxShadow: 'none' }}>
                 <Avatar
                   icon={<BellOutlined />}
+                  onClick={() => setSelectedKey('6')}
                   style={{
-                    backgroundColor: 'rgba(255,255,255,0.05)',
+                    backgroundColor: settingsData.theme_mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
                     cursor: 'pointer',
-                    color: '#cbd5e1'
+                    color: themeColors.textSub
                   }}
                 />
               </Badge>
               <Space style={{ cursor: 'pointer' }}>
                 <Avatar
+                  src={settingsData.profile_pic}
                   style={{
                     background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
                     verticalAlign: 'middle'
                   }}
                   size="large"
                 >
-                  RM
+                  {!settingsData.profile_pic && (settingsData.name ? settingsData.name.split(' ').map(n=>n[0]).join('').toUpperCase() : 'RM')}
                 </Avatar>
                 <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                  <Text strong style={{ color: '#f3f4f6', fontSize: 13 }}>Ravi M</Text>
-                  <Text type="secondary" style={{ fontSize: 11, color: '#9ca3af' }}>Administrator</Text>
+                  <Text strong style={{ color: themeColors.textMain, fontSize: 13 }}>{settingsData.name || 'Ravi M'}</Text>
+                  <Text type="secondary" style={{ fontSize: 11, color: themeColors.textSub }}>{settingsData.role || 'Administrator'}</Text>
                 </div>
               </Space>
             </Space>
@@ -534,7 +648,7 @@ function AppContent() {
           <Content style={{
             padding: '24px',
             overflowY: 'auto',
-            background: '#0b0f19'
+            background: themeColors.bgBase
           }}>
             {selectedKey === '1' && (
               /* Dashboard View */
@@ -791,15 +905,18 @@ function AppContent() {
             )}
 
             {selectedKey === '3' && <AIAssistantPanel />}
+            {selectedKey === '4' && <Reports />}
+            {selectedKey === '5' && <Settings />}
+            {selectedKey === '6' && <Notifications />}
 
-            {selectedKey !== '1' && selectedKey !== '2' && selectedKey !== '3' && (
+            {selectedKey !== '1' && selectedKey !== '2' && selectedKey !== '3' && selectedKey !== '4' && selectedKey !== '5' && selectedKey !== '6' && (
               /* Other Pages Placeholder */
-              <Card bordered={false} style={{ textAlign: 'center', padding: '60px 0' }}>
+              <Card bordered={false} style={{ textAlign: 'center', padding: '60px 0', background: themeColors.bgContainer }}>
                 <RobotOutlined style={{ fontSize: 64, color: '#6366f1', marginBottom: 20 }} />
-                <Title level={3} style={{ color: '#fff' }}>
+                <Title level={3} style={{ color: themeColors.textMain }}>
                   {menuItems.find(item => item.key === selectedKey)?.label}
                 </Title>
-                <Text type="secondary" style={{ color: '#9ca3af' }}>
+                <Text type="secondary" style={{ color: themeColors.textSub }}>
                   This page component is currently empty. Routing integration and AI copilot agents are next in queue.
                 </Text>
               </Card>
@@ -1072,7 +1189,7 @@ function AppContent() {
               <Button
                 type="primary"
                 onClick={() => {
-                  dispatch(updateComplaint({ id: selectedComplaint.id, changes: { status: 'Closed' } }));
+                  dispatch(updateComplaintBackendThunk({ id: selectedComplaint.id, changes: { status: 'Closed' } }));
                   setSelectedComplaint({ ...selectedComplaint, status: 'Closed' });
                   message.success(`Complaint ${selectedComplaint.id} has been marked as CLOSED.`);
                 }}
@@ -1112,6 +1229,26 @@ function AppContent() {
                 <InfoCircleOutlined style={{ color: '#6366f1' }} /> Defect Description Narrative
               </Title>
               <Text style={{ color: '#cbd5e1', lineHeight: 1.6 }}>{selectedComplaint.description}</Text>
+            </div>
+
+            <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #1f2937' }}>
+              <Title level={5} style={{ margin: '0 0 12px 0', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <RobotOutlined style={{ color: '#10b981' }} /> AI Diagnostics & Recommendations
+              </Title>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <Text strong style={{ color: '#818cf8', fontSize: 12, display: 'block', marginBottom: 4 }}>Root Cause Analysis:</Text>
+                  <Text style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.5 }}>
+                    {selectedComplaint.root_cause || 'No AI Root Cause Analysis recorded. Try running Copilot ingestion.'}
+                  </Text>
+                </div>
+                <div>
+                  <Text strong style={{ color: '#10b981', fontSize: 12, display: 'block', marginBottom: 4 }}>Recommended CAPA Action Plan:</Text>
+                  <Text style={{ color: '#cbd5e1', fontSize: 12, lineHeight: 1.5 }}>
+                    {selectedComplaint.capa_recommendation || 'No CAPA Recommendations recorded. Try running Copilot ingestion.'}
+                  </Text>
+                </div>
+              </div>
             </div>
 
             <Divider style={{ margin: '8px 0', borderColor: '#1f2937' }} />
@@ -1258,7 +1395,7 @@ function AppContent() {
                                 size="small" 
                                 icon={<CheckOutlined />}
                                 onClick={() => {
-                                  dispatch(updateComplaint({
+                                  dispatch(updateComplaintBackendThunk({
                                     id: selectedComplaint.id,
                                     changes: {
                                       batch: inlineBatch,

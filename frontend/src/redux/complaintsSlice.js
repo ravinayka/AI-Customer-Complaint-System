@@ -1,4 +1,46 @@
-import { createSlice } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { getComplaints, createComplaint, updateComplaintBackend } from '../services/reportsApi';
+import { fetchReportsStatistics } from './reportsSlice';
+
+export const fetchComplaints = createAsyncThunk(
+  'complaints/fetchComplaints',
+  async (_, { rejectWithValue }) => {
+    try {
+      const data = await getComplaints();
+      return data;
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
+export const saveComplaint = createAsyncThunk(
+  'complaints/saveComplaint',
+  async (complaintData, { dispatch, rejectWithValue }) => {
+    try {
+      const data = await createComplaint(complaintData);
+      // Reactively refresh reports statistics!
+      dispatch(fetchReportsStatistics());
+      return data;
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
+
+export const updateComplaintBackendThunk = createAsyncThunk(
+  'complaints/updateComplaintBackend',
+  async ({ id, changes }, { dispatch, rejectWithValue }) => {
+    try {
+      const data = await updateComplaintBackend(id, changes);
+      // Reactively refresh reports statistics!
+      dispatch(fetchReportsStatistics());
+      return data;
+    } catch (error) {
+      return rejectWithValue(error.message);
+    }
+  }
+);
 
 const initialComplaints = [
   {
@@ -120,9 +162,13 @@ const complaintsSlice = createSlice({
     extractionProgress: 0,
     extractionSteps: [],
     currentStepIndex: -1,
-    extractedResult: null
+    extractedResult: null,
+    activeComplaintId: null
   },
   reducers: {
+    setActiveComplaintId: (state, action) => {
+      state.activeComplaintId = action.payload;
+    },
     addComplaint: (state, action) => {
       state.list = [action.payload, ...state.list];
     },
@@ -165,6 +211,20 @@ const complaintsSlice = createSlice({
       state.currentStepIndex = -1;
       state.extractedResult = null;
     }
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchComplaints.fulfilled, (state, action) => {
+        state.list = action.payload;
+      })
+      .addCase(saveComplaint.fulfilled, (state, action) => {
+        state.list = [action.payload, ...state.list];
+      })
+      .addCase(updateComplaintBackendThunk.fulfilled, (state, action) => {
+        state.list = state.list.map(c => 
+          c.id === action.payload.id ? action.payload : c
+        );
+      });
   }
 });
 
@@ -178,7 +238,8 @@ export const {
   updateExtractedField,
   setExtractionSteps,
   setCurrentStepIndex,
-  resetExtractionState
+  resetExtractionState,
+  setActiveComplaintId
 } = complaintsSlice.actions;
 
 export default complaintsSlice.reducer;

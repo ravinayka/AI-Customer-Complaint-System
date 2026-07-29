@@ -180,6 +180,26 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
         priority = "Critical"
         prio_conf = 0.95
 
+    # 8. Root Cause & CAPA Recommendations Fallback
+    root_cause = "Substandard packaging seal, tooling wear, or shipping temperature fluctuation."
+    capa = "Initiate visual inspection of punches, audit packaging line settings, and check logistics thermal records."
+    
+    if category == "Adverse Reaction":
+        root_cause = "Patient sensitivity event, active ingredient concentration discrepancy, or thermal degradation during storage."
+        capa = "Initiate immediate pharmacovigilance safety evaluation, isolate sample stock, and perform chemical assay validation."
+    elif category == "Quality Defect":
+        root_cause = "Machine compression calibration discrepancy, raw material batch impurities, or ambient moisture exposure."
+        capa = "Check compression force parameters, run dissolution profiling on retainer samples, and inspect storage desiccant bags."
+    elif category == "Packaging Damage":
+        root_cause = "Thermal sealer wear, improper carton handling, or low-grade sealer adhesive."
+        capa = "Service packaging heat tunnel sensors, check conveyor belt alignment, and audit sealing temperature log sheets."
+    elif category == "Inefficacy":
+        root_cause = "Potential dissolution profile failure, active ingredient degradation, or patient tolerance factors."
+        capa = "Run dissolution and assay tests on reference samples, and review raw material certificates of analysis."
+    elif category == "Contamination":
+        root_cause = "Particle filtration breakdown, HVAC environmental cleanroom failure, or visual wear on cleanroom apparel."
+        capa = "Check HEPA filter differential pressure gauge records, perform microbial monitoring tests, and clean visual inspection tables."
+
     description = text if len(text) < 500 else text[:500] + "..."
     desc_conf = 0.98 if len(text.strip()) > 30 else 0.50
 
@@ -195,7 +215,9 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
             "complaintDescription": description,
             "quantityAffected": qty,
             "severity": severity,
-            "priority": priority
+            "priority": priority,
+            "rootCause": root_cause,
+            "capa": capa
         },
         "confidence": {
             "customerName": cust_conf,
@@ -208,7 +230,9 @@ def parse_with_regex_fallback(text: str) -> Dict[str, Any]:
             "complaintDescription": desc_conf,
             "quantityAffected": qty_conf,
             "severity": sev_conf,
-            "priority": prio_conf
+            "priority": prio_conf,
+            "rootCause": 0.85,
+            "capa": 0.85
         }
     }
 
@@ -245,11 +269,14 @@ def groq_extraction(text: str) -> Dict[str, Any]:
       "complaintDescription": {"value": string, "confidence": float},
       "quantityAffected": {"value": integer or null, "confidence": float},
       "severity": {"value": "Low" | "Medium" | "High", "confidence": float},
-      "priority": {"value": "Low" | "Medium" | "High" | "Critical", "confidence": float}
+      "priority": {"value": "Low" | "Medium" | "High" | "Critical", "confidence": float},
+      "rootCause": {"value": string, "confidence": float},
+      "capa": {"value": string, "confidence": float}
     }
 
     Notes:
     - For Dates, if only year/month is mentioned, default to first day of month (e.g. YYYY-MM-01).
+    - For 'rootCause' and 'capa', analyze the complaint category and description to suggest the most likely pharmaceutical root cause and corrective/preventive action (CAPA) recommendation.
     - If Severity is High/Critical and Batch Number or Mfg Date is missing, automatically escalate Priority to 'Critical'.
     - Output ONLY valid JSON inside a code block or as raw text. Do not write markdown descriptions.
     """
@@ -324,12 +351,46 @@ def analyse_complaint_node(state: ExtractionState) -> ExtractionState:
     severity = data.get("severity", "Medium")
     batch = data.get("batchNumber", "")
     mfg_date = data.get("manufacturingDate", None)
+    category = data.get("complaintType", "Quality Defect")
     
     # Trigger escalation logic
     if severity == "High" and (not batch or batch == "" or not mfg_date):
         data["priority"] = "Critical"
         conf["priority"] = 0.95
         state["steps"].append("QA Escalation triggered: Elevated priority to Critical due to High risk with missing trace logs.")
+        
+    # Ensure Root Cause & CAPA recommendations are present
+    if "rootCause" not in data or not data["rootCause"]:
+        root_cause = "Substandard packaging seal, tooling wear, or shipping temperature fluctuation."
+        if category == "Adverse Reaction":
+            root_cause = "Patient sensitivity event, active ingredient concentration discrepancy, or thermal degradation during storage."
+        elif category == "Quality Defect":
+            root_cause = "Machine compression calibration discrepancy, raw material batch impurities, or ambient moisture exposure."
+        elif category == "Packaging Damage":
+            root_cause = "Thermal sealer wear, improper carton handling, or low-grade sealer adhesive."
+        elif category == "Inefficacy":
+            root_cause = "Potential dissolution profile failure, active ingredient degradation, or patient tolerance factors."
+        elif category == "Contamination":
+            root_cause = "Particle filtration breakdown, HVAC environmental cleanroom failure, or visual wear on cleanroom apparel."
+        data["rootCause"] = root_cause
+        conf["rootCause"] = 0.80
+        state["steps"].append("LangGraph Node: Automatically populated baseline pharmaceutical Root Cause Analysis.")
+        
+    if "capa" not in data or not data["capa"]:
+        capa = "Initiate visual inspection of punches, audit packaging line settings, and check logistics thermal records."
+        if category == "Adverse Reaction":
+            capa = "Initiate immediate pharmacovigilance safety evaluation, isolate sample stock, and perform chemical assay validation."
+        elif category == "Quality Defect":
+            capa = "Check compression force parameters, run dissolution profiling on retainer samples, and inspect storage desiccant bags."
+        elif category == "Packaging Damage":
+            capa = "Service packaging heat tunnel sensors, check conveyor belt alignment, and audit sealing temperature log sheets."
+        elif category == "Inefficacy":
+            capa = "Run dissolution and assay tests on reference samples, and review raw material certificates of analysis."
+        elif category == "Contamination":
+            capa = "Check HEPA filter differential pressure gauge records, perform microbial monitoring tests, and clean visual inspection tables."
+        data["capa"] = capa
+        conf["capa"] = 0.80
+        state["steps"].append("LangGraph Node: Generated recommendation corrective/preventive CAPA plan.")
         
     return state
 
